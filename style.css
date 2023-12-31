@@ -1,0 +1,133 @@
+#gameBoard {
+    display: grid;
+    grid-template-columns: repeat(8, 50px);
+    grid-template-rows: repeat(8, 50px);
+    gap: 2px;
+    background-color: #f0876a;
+    padding: 10px;
+    border-radius: 10px;
+    width: fit-content;
+    margin: auto;
+}
+
+.tile {
+    width: 50px;
+    height: 50px;
+    background-color: #fde8dc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    border-radius: 5px;
+}
+
+.circle {
+    width: 80%; /* Circle size */
+    height: 80%; /* Circle size */
+    border-radius: 50%;
+    background-color: transparent; /* Default transparent background */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.player1 .circle {
+    background-color: #ffcccc; /* Player 1's circle */
+}
+
+.player2 .circle {
+    background-color: #ccccff; /* Player 2's circle */
+}
+
+.dot {
+    width: 30px;
+    height: 30px;
+    background-color: #2E3440; /* Dot color */
+    border-radius: 50%;
+    position: absolute;
+    text-align: center;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    /* Add the following line to center vertically */
+    line-height: 30px;
+}
+
+
+/* Individual dot positioning based on the number of dots */
+.dot-1-1 {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.dot-2-1 {
+    left: 30%;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.dot-2-2 {
+    left: 70%;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.dot-3-1 {
+    left: 50%;
+    top: 30%;
+}
+
+.dot-3-2 {
+    left: 25%;
+    top: 70%;
+}
+
+.dot-3-3 {
+    left: 75%;
+    top: 70%;
+}
+
+.dot-4-1 {
+    left: 25%;
+    top: 25%;
+}
+
+.dot-4-2 {
+    left: 75%;
+    top: 25%;
+}
+
+.dot-4-3 {
+    left: 25%;
+    top: 75%;
+}
+
+.dot-4-4 {
+    left: 75%;
+    top: 75%;
+}
+
+/* Add further styles for player-specific dot colors if needed */
+.player1 .dot {
+    background-color: #ff6666;
+}
+
+.player2 .dot {
+    background-color: #6699ff;
+}
+
+.tile.no-click {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.unclickable {
+    pointer-events: none;
+    opacity: 0.5; /* To visually indicate that the tile is unclickable */
+}
