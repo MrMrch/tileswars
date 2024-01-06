@@ -35,6 +35,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
+    pointer-events: none;
     /* Add the following line to center vertically */
     line-height: 30px;
 }
@@ -61,5 +62,5 @@
 /* Style to prevent clicking on the tile. This class can be toggled via JavaScript */
 .tile.no-click {
     pointer-events: none;
-    opacity: 0.9; /* Optional: reduces opacity when tile is not clickable */
+    opacity: 0.4; /* Optional: reduces opacity when tile is not clickable */
 }
