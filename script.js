@@ -97,6 +97,12 @@ function showLossMessage(playerIdx){
   if(defeatTitle){
     defeatTitle.style.color = `#${color.toString(16).padStart(6, '0')}`;
   }
+  if(closeDefeatBtn){
+    const hex = `#${color.toString(16).padStart(6, '0')}`;
+    closeDefeatBtn.style.backgroundColor = hex;
+    closeDefeatBtn.style.borderColor = hex;
+    closeDefeatBtn.style.color = '#ffffff';
+  }
   if(defeatMessage){
     defeatMessage.textContent = "Il tuo impero è caduto. La partita continua per gli altri.";
   }
@@ -3576,7 +3582,9 @@ function updateTimerDisplay(){
     }
   }
   if(shrinkCounterDisplayElem){
-    if(showShrinkCounter && shrinkEnabled && !waitingForShrinkGate){
+    const showAfterGate = shrinkCoverageGateEnabled && shrinkGateReached;
+    const shouldShow = shrinkEnabled && (showShrinkCounter || showAfterGate) && !waitingForShrinkGate;
+    if(shouldShow){
       const mod = roundsPerRing > 0 ? (shrinkRoundsCompleted % roundsPerRing) : 0;
       const left = roundsPerRing > 0 ? (mod === 0 ? roundsPerRing : (roundsPerRing - mod)) : 0;
       shrinkCounterDisplayElem.style.display = 'inline';
