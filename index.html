@@ -1,13 +1,292 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Chain Reaction Game</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <title>Tiles Wars</title>
+  <!-- Caricamento librerie esterne (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.2.4/pixi.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <!-- CSS dist -->
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="gameBoard"></div>
-    <script src="script.js"></script>
+  <!-- ================= SETUP MENU ================== -->
+  <div id="menu">
+    <div class="menu-card">
+      <div class="menu-header">
+        <h1>Chain Reaction</h1>
+        <p class="subtitle">Setup partita • Scegli le impostazioni e inizia</p>
+      </div>
+
+      <div class="menu-grid">
+        <div class="form-group">
+          <div class="group-title">Players</div>
+          <div class="form-row">
+            <label for="playerSelect">Number of players (1..6)</label>
+            <select id="playerSelect">
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="aiPlayerSelect">AI Players</label>
+            <select id="aiPlayerSelect">
+              <!-- Options popolati da JS -->
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="group-title">Grid</div>
+          <div class="form-row">
+            <label for="widthSelect">Grid Width (4..12)</label>
+            <select id="widthSelect">
+              <option value="4" selected>4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+              <option value="11">11</option>
+              <option value="12">12</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="heightSelect">Grid Height (4..12)</label>
+            <select id="heightSelect">
+              <option value="4" selected>4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+              <option value="11">11</option>
+              <option value="12">12</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="rockCellInput">Number of Rock Cells</label>
+            <input type="number" id="rockCellInput" min="0" value="0">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="group-title">Timers</div>
+          <div class="form-row">
+            <label for="turnTimerInput">Turn Timer (seconds)</label>
+            <input type="number" id="turnTimerInput" min="5" max="60" value="30">
+          </div>
+          <div class="form-row">
+            <label for="suddenDeathTimerInput">Sudden Death Timer (seconds)</label>
+            <input type="number" id="suddenDeathTimerInput" min="10" max="300" value="60">
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="suddenDeathToggle">
+            Enable Sudden Death Timer
+          </label>
+        </div>
+
+        <div class="form-group">
+          <div class="group-title">Options</div>
+          <div class="form-row">
+            <label for="setupSelect">Initial Setup</label>
+            <select id="setupSelect">
+              <option value="auto" selected>Automatic</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="initValueSelect">Initial Tile Value</label>
+            <select id="initValueSelect">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4 (explodes immediately!)</option>
+            </select>
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="toggleNumbers">
+            Show numbers on tiles
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="showDefeatPopupToggle" checked>
+            Show defeat popup
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="tilesOfWarToggle">
+            Enable Tiles of War (powerups)
+          </label>
+          <div class="form-row">
+            <label for="powerupCooldownInput">Powerup cooldown (turns per player)</label>
+            <input type="number" id="powerupCooldownInput" min="0" max="10" value="2" style="max-width:120px"/>
+          </div>
+          <div class="form-row">
+            <label for="powerupCooldownMode">Cooldown applies to</label>
+            <select id="powerupCooldownMode">
+              <option value="block" selected>Whole powerup bar</option>
+              <option value="perPower">Individual powerups</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="specialTilesToggle">Special Tiles (every X turns)</label>
+            <input type="checkbox" id="specialTilesToggle">
+            <input type="number" id="specialTilesInterval" min="1" value="5" style="max-width:120px"/>
+          </div>
+          <div class="form-row">
+            <label for="specialTilesDuration">Special lasts (Y rounds)</label>
+            <input type="number" id="specialTilesDuration" min="1" value="3" style="max-width:120px"/>
+          </div>
+          <div class="form-row">
+            <label for="scoreTargetInput">Score to win (special mode)</label>
+            <input type="number" id="scoreTargetInput" min="10" max="500" value="100" style="max-width:140px"/>
+          </div>
+          <div class="form-row">
+            <label for="powerupCostMode">Powerup payment</label>
+            <select id="powerupCostMode">
+              <option value="tile" selected>Sacrifice tile</option>
+              <option value="points">Pay points</option>
+              <option value="either">Tile or points</option>
+            </select>
+            <input type="number" id="powerupPointCost" min="0" max="200" value="20" style="max-width:120px" title="Points cost if paying with points"/>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="group-title">Endgame</div>
+          <div class="form-row">
+            <label for="roundsPerRingInput">Rounds per shrink (1..50)</label>
+            <input type="number" id="roundsPerRingInput" min="1" max="50" value="6">
+          </div>
+          <div class="form-row">
+            <label for="shrinkCoverageToggle">Delay shrink until board coverage (%)</label>
+            <input type="checkbox" id="shrinkCoverageToggle">
+            <input type="number" id="shrinkCoverageInput" min="10" max="100" value="75" style="max-width:120px">
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="shrinkEnabledToggle" checked>
+            Enable Shrinking Rings
+          </label>
+          <div class="form-row">
+            <label for="shrinkAnimSelect">Shrink animation</label>
+            <select id="shrinkAnimSelect">
+              <option value="fall">Falling Blocks</option>
+              <option value="walls">Closing Walls</option>
+              <option value="falloff" selected>Falling Edge (platform)</option>
+            </select>
+            <button id="previewShrinkAnimBtn" type="button">Preview</button>
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="showShrinkCounterToggle">
+            Show shrink counter during match
+          </label>
+        </div>
+
+        <!-- MOVED: Multiplayer block inside grid -->
+        <div class="menu-network">
+          <div class="group-title">Multiplayer (local test)</div>
+          <div class="form-row" id="netPlayerCountRow" style="display:flex;">
+            <label>Players in room</label>
+            <span id="netPlayerCount" style="font-weight:700;">0</span>
+            <button type="button" id="syncStateBtn" style="display:none; margin-left:auto; font-size:11px; padding:2px 6px;">Sync State</button>
+          </div>
+          <div class="form-row">
+            <label>Mode</label>
+            <button type="button" id="netModeToggle" style="min-width: 140px;">Multiplayer</button>
+          </div>
+          <div class="form-row" id="netAiRow" style="display:flex; align-items:center; gap:10px;">
+            <label>Add AI Players</label>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button type="button" id="decAiBtn" style="padding:2px 8px;">-</button>
+              <span id="multiAiCount" style="font-weight:700; min-width:12px; text-align:center;">0</span>
+              <button type="button" id="incAiBtn" style="padding:2px 8px;">+</button>
+            </div>
+          </div>
+          <div class="form-row" id="netButtons" style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button type="button" id="createRoomBtn">Create room</button>
+            <button type="button" id="joinRoomBtn">Join room</button>
+            <input type="text" id="roomCodeInput" placeholder="ROOMCODE" style="max-width:140px; text-transform:uppercase;"/>
+          </div>
+          <div class="form-row" id="netStatusRow" style="display:flex; font-weight:600; color:#1f2937;">
+            <label>Status</label>
+            <button type="button" id="netStatus" style="border:none; background:none; padding:0; cursor:pointer; color:#1d4ed8;">Offline</button>
+          </div>
+          <p class="hint">Host creates a room, others join with the code. Works only via local WS relay (node server.js).</p>
+        </div>
+      </div>
+
+      <div class="menu-actions">
+        <button id="startBtn" class="primary">Start Game</button>
+        <button id="presetStandardBtn" type="button" style="margin-left:8px;">Preset 10x10 • 4P (3 AI) • Shrink 10</button>
+        <button id="presetChaos2PBtn" type="button" style="margin-left:8px;">Chaos Preset • 50% Filled • Shrink 3</button>
+        <button id="presetDebugBtn" type="button" style="margin-left:8px;">Preset Debug • 10x10 • 4P (3 AI) • Shrink 3</button>
+        <button id="presetQuadrantSeedBtn" type="button" style="margin-left:8px;">Preset Test 10x10 • 4P Quadrants Seed</button>
+        <div id="presetPreview" class="preset-preview" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================== GAME CONTAINER ================== -->
+  <div id="game-container">
+    <div id="powerupBar" aria-hidden="true">
+      <button class="powerup-btn" id="powerupRomboid" disabled>⬦ Romboid</button>
+      <button class="powerup-btn" id="powerupViewfinder" disabled>🎯 Viewfinder</button>
+      <button class="powerup-btn" id="powerupWall" disabled>🧱 Wall</button>
+      <div class="powerup-cooldown" id="powerupCooldownHint"></div>
+    </div>
+    <div id="pixiContainer"></div>
+    <div id="leaderboard">
+      <h2 style="text-align:center; margin-bottom: 10px;">Leaderboard</h2>
+      <!-- Leaderboard entries generati dinamicamente -->
+    </div>
+    <!-- Nuovo pulsante Restart -->
+    <button id="restartGameButton">Restart</button>
+  </div>
+
+  <!-- ================== ENDGAME OVERLAY ================== -->
+  <div id="endgameOverlay">
+    <h1 id="winnerText">Player X Wins!</h1>
+    <button id="restartButton">Restart Game</button>
+  </div>
+
+  <!-- ================== DEFEAT OVERLAY ================== -->
+  <div id="defeatOverlay" class="overlay-hidden">
+    <div class="defeat-card">
+      <h1 id="defeatTitle">HAI PERSO</h1>
+      <p id="defeatMessage">Il tuo impero è caduto. La partita continua per gli altri.</p>
+      <p id="defeatBestMove" class="defeat-best"></p>
+      <button id="closeDefeatBtn">Continua a osservare</button>
+    </div>
+  </div>
+
+  <!-- ================== TIMER DISPLAY ================== -->
+  <div id="timerDisplay">
+    <span id="turnTimerDisplay">Turn Timer: 0s</span> |
+    <span id="suddenDeathTimerDisplay">Sudden Death Timer: 0s</span>
+    | <span id="shrinkCounterDisplay">Shrink in: 0 rounds</span>
+  </div>
+  <div id="newsBox" aria-live="polite" aria-hidden="true">
+    <div class="news-header">
+      <div class="news-logo">📰 <strong>Tiles Wars News</strong></div>
+      <button id="newsMinBtn" title="Minimize/Expand" type="button">–</button>
+    </div>
+    <div id="newsFeed"></div>
+  </div>
+  <div id="previewModal" aria-hidden="true">
+    <div class="preview-card">
+      <div class="preview-header">
+        <div>Shrink Animation Preview</div>
+        <button id="closePreviewBtn" type="button">✕</button>
+      </div>
+      <div id="previewStage"></div>
+    </div>
+  </div>
+
+  <!-- Carichiamo lo script alla fine del body, così il DOM è già pronto -->
+  <script src="script.js" defer></script>
 </body>
 </html>
