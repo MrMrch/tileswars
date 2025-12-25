@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tiles Wars</title>
   <!-- Caricamento librerie esterne (CDN) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.2.4/pixi.min.js"></script>
@@ -19,7 +20,7 @@
       </div>
 
       <div class="menu-grid">
-        <div class="form-group">
+        <div class="form-group group-players">
           <div class="group-title">Players</div>
           <div class="form-row">
             <label for="playerSelect">Number of players (1..6)</label>
@@ -39,7 +40,7 @@
           </div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group group-grid">
           <div class="group-title">Grid</div>
           <div class="form-row">
             <label for="widthSelect">Grid Width (4..12)</label>
@@ -75,7 +76,7 @@
           </div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group group-timers">
           <div class="group-title">Timers</div>
           <div class="form-row">
             <label for="turnTimerInput">Turn Timer (seconds)</label>
@@ -91,7 +92,7 @@
           </label>
         </div>
 
-        <div class="form-group">
+        <div class="form-group group-options">
           <div class="group-title">Options</div>
           <div class="form-row">
             <label for="setupSelect">Initial Setup</label>
@@ -121,6 +122,20 @@
             <input type="checkbox" id="tilesOfWarToggle">
             Enable Tiles of War (powerups)
           </label>
+          <div id="powerupOptions" class="powerup-options" aria-hidden="true">
+            <label class="checkbox-row">
+              <input type="checkbox" id="powerupRomboidToggle" checked>
+              Enable Romboid
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="powerupViewfinderToggle" checked>
+              Enable Viewfinder
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="powerupWallToggle" checked>
+              Enable Wall
+            </label>
+          </div>
           <div class="form-row">
             <label for="powerupCooldownInput">Powerup cooldown (turns per player)</label>
             <input type="number" id="powerupCooldownInput" min="0" max="10" value="2" style="max-width:120px"/>
@@ -156,7 +171,7 @@
           </div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group group-endgame">
           <div class="group-title">Endgame</div>
           <div class="form-row">
             <label for="roundsPerRingInput">Rounds per shrink (1..50)</label>
@@ -187,7 +202,7 @@
         </div>
 
         <!-- MOVED: Multiplayer block inside grid -->
-        <div class="menu-network">
+        <div class="menu-network group-network">
           <div class="group-title">Multiplayer (local test)</div>
           <div class="form-row" id="netPlayerCountRow" style="display:flex;">
             <label>Players in room</label>
@@ -196,7 +211,7 @@
           </div>
           <div class="form-row">
             <label>Mode</label>
-            <button type="button" id="netModeToggle" style="min-width: 140px;">Multiplayer</button>
+            <button type="button" id="netModeToggle" style="min-width: 140px;">Local (offline)</button>
           </div>
           <div class="form-row" id="netAiRow" style="display:flex; align-items:center; gap:10px;">
             <label>Add AI Players</label>
@@ -238,12 +253,27 @@
       <button class="powerup-btn" id="powerupWall" disabled>🧱 Wall</button>
       <div class="powerup-cooldown" id="powerupCooldownHint"></div>
     </div>
+    <!-- ================== TIMER DISPLAY ================== -->
+    <div id="timerDisplay">
+      <div class="timer-main">
+        <span id="turnTimerDisplay" class="player-timer">Turn Timer: 0s</span>
+        <span id="suddenDeathTimerDisplay" class="timer-detail">Sudden Death Timer: 0s</span>
+        <span id="shrinkCounterDisplay" class="timer-detail">Shrink in: 0 rounds</span>
+      </div>
+      <div id="shrinkCoverageBuffer" class="shrink-buffer" aria-hidden="true">
+        <div id="shrinkCoverageLabel" class="shrink-buffer-label">Shrink gate: 0%</div>
+        <div class="shrink-buffer-track">
+          <div id="shrinkCoverageFill" class="shrink-buffer-fill"></div>
+        </div>
+      </div>
+    </div>
     <div id="pixiContainer"></div>
     <div id="leaderboard">
       <h2 style="text-align:center; margin-bottom: 10px;">Leaderboard</h2>
       <!-- Leaderboard entries generati dinamicamente -->
     </div>
-    <!-- Nuovo pulsante Restart -->
+    <!-- Nuovi pulsanti in-game -->
+    <button id="pauseGameButton">Pause</button>
     <button id="restartGameButton">Restart</button>
   </div>
 
@@ -262,12 +292,28 @@
       <button id="closeDefeatBtn">Continua a osservare</button>
     </div>
   </div>
-
-  <!-- ================== TIMER DISPLAY ================== -->
-  <div id="timerDisplay">
-    <span id="turnTimerDisplay">Turn Timer: 0s</span> |
-    <span id="suddenDeathTimerDisplay">Sudden Death Timer: 0s</span>
-    | <span id="shrinkCounterDisplay">Shrink in: 0 rounds</span>
+  <!-- ================== PAUSE OVERLAY ================== -->
+  <div id="pauseOverlay" class="overlay-hidden">
+    <div class="pause-card">
+      <h1>Paused</h1>
+      <p>Game is frozen. Resume when you're ready.</p>
+      <div class="pause-actions">
+        <button id="resumeBtn" class="primary">Resume</button>
+        <button id="pauseRestartBtn">Restart</button>
+        <button id="pauseExitBtn">Exit</button>
+      </div>
+    </div>
+  </div>
+  <!-- ================== CONFIRM OVERLAY ================== -->
+  <div id="confirmOverlay" class="overlay-hidden">
+    <div class="confirm-card">
+      <h2 id="confirmTitle">Are you sure?</h2>
+      <p id="confirmMessage">Are you sure you want to proceed?</p>
+      <div class="confirm-actions">
+        <button id="confirmYesBtn" class="primary">Yes</button>
+        <button id="confirmNoBtn">No</button>
+      </div>
+    </div>
   </div>
   <div id="newsBox" aria-live="polite" aria-hidden="true">
     <div class="news-header">

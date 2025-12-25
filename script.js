@@ -67,6 +67,10 @@ const powerupRomboidBtn = document.getElementById("powerupRomboid");
 const powerupViewfinderBtn = document.getElementById("powerupViewfinder");
 const powerupWallBtn = document.getElementById("powerupWall");
 const powerupCooldownHint = document.getElementById("powerupCooldownHint");
+const powerupOptionsWrap = document.getElementById("powerupOptions");
+const powerupRomboidToggle = document.getElementById("powerupRomboidToggle");
+const powerupViewfinderToggle = document.getElementById("powerupViewfinderToggle");
+const powerupWallToggle = document.getElementById("powerupWallToggle");
 
 // Riferimenti all'endgame overlay
 const endgameOverlay     = document.getElementById("endgameOverlay");
@@ -102,13 +106,27 @@ function showLossMessage(playerIdx){
 }
 
 // Riferimenti ai timer
+const timerDisplayElem = document.getElementById("timerDisplay");
 const turnTimerDisplayElem      = document.getElementById("turnTimerDisplay");
 const suddenDeathTimerDisplayElem = document.getElementById("suddenDeathTimerDisplay");
 const shrinkCounterDisplayElem = document.getElementById("shrinkCounterDisplay");
+const shrinkCoverageBufferElem = document.getElementById("shrinkCoverageBuffer");
+const shrinkCoverageFillElem = document.getElementById("shrinkCoverageFill");
+const shrinkCoverageLabelElem = document.getElementById("shrinkCoverageLabel");
 const commentaryBar = document.getElementById("commentaryBar");
 const newsFeed = document.getElementById("newsFeed");
 const newsBox = document.getElementById("newsBox");
 const newsMinBtn = document.getElementById("newsMinBtn");
+const pauseGameButton = document.getElementById("pauseGameButton");
+const pauseOverlay = document.getElementById("pauseOverlay");
+const resumeBtn = document.getElementById("resumeBtn");
+const pauseRestartBtn = document.getElementById("pauseRestartBtn");
+const pauseExitBtn = document.getElementById("pauseExitBtn");
+const confirmOverlay = document.getElementById("confirmOverlay");
+const confirmTitle = document.getElementById("confirmTitle");
+const confirmMessage = document.getElementById("confirmMessage");
+const confirmYesBtn = document.getElementById("confirmYesBtn");
+const confirmNoBtn = document.getElementById("confirmNoBtn");
 
 // Helper for generating unique grid keys
 function keyXY(x, y) { return `${x},${y}`; }
@@ -129,6 +147,10 @@ let pendingSyncSnapshot = null;
 let logicalRoundWorkDone = false;
 let currentTurnSessionId = 0;
 let fxLayer = null;
+let isPaused = false;
+let pendingConfirmAction = null;
+let aiMoveTimeoutId = null;
+let pendingAIMovePlayer = null;
 
 function resetTurnWatchdog(){
   if(turnWatchdog) clearTimeout(turnWatchdog);
@@ -150,6 +172,33 @@ let gridWidthNum = 6;
 let gridHeightNum = 6;
 
 let tileSize = 60;
+
+function computeTileSizeForViewport(){
+  const fallbackTile = 40;
+  const viewW = window.innerWidth || 800;
+  const viewH = window.innerHeight || 600;
+  let padX = 40;
+  let padY = 130;
+  let gap = 16;
+  if(gameDiv){
+    const styles = window.getComputedStyle(gameDiv);
+    padX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0);
+    padY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0);
+    gap = parseFloat(styles.gap) || gap;
+  }
+  const anyPowerupEnabled = tilesOfWarEnabled && Object.values(powerupEnabled || {}).some(Boolean);
+  const powerupVisible = powerupBar && powerupBar.offsetParent !== null && powerupBar.offsetHeight > 0;
+  const timerVisible = timerDisplayElem && timerDisplayElem.offsetParent !== null && timerDisplayElem.offsetHeight > 0;
+  const powerupHeight = powerupVisible ? powerupBar.offsetHeight : (anyPowerupEnabled ? 58 : 0);
+  const timerHeight = timerVisible ? timerDisplayElem.offsetHeight : 0;
+  const reservedV = powerupHeight + timerHeight
+    + gap * ((powerupHeight > 0 ? 1 : 0) + (timerHeight > 0 ? 1 : 0));
+  const availableW = Math.max(0, viewW - padX);
+  const availableH = Math.max(0, viewH - padY - reservedV);
+  let size = Math.floor(Math.min(availableW / gridWidthNum, availableH / gridHeightNum));
+  if(!Number.isFinite(size) || size <= 0) size = fallbackTile;
+  return Math.max(24, Math.min(72, size));
+}
 
 let grid = [];
 
@@ -200,6 +249,7 @@ let shrinkCoveragePercent = 75;
 let shrinkGateReached = false;
 let shrinkCoverageTargetCount = 0;
 let tilesOfWarEnabled = false;
+let powerupEnabled = { romboid: true, viewfinder: true, wall: true };
 let showDefeatPopup = !!(showDefeatPopupToggle && showDefeatPopupToggle.checked);
 let powerupCooldownTurns = 2;
 let powerupCooldownMode = 'block'; // block or perPower
@@ -217,6 +267,7 @@ let applyQuadrantSeedThisGame = false;
 let turnsTaken = 0;          // total individual turns completed
 let roundsCompleted = 0;     // full rotations completed (every totalPlayers turns)
 let roundsPerRing = 10;      // after this many rounds, shrink outer ring
+let shrinkRoundsCompleted = 0; // rounds counted since shrink gate reached
 let ringsApplied = 0;        // how many rings already applied
 let shrinkAnimMode = 'fall';
 let shrinkEnabled = true;
@@ -229,7 +280,7 @@ let activeSpecialTiles = new Set();
 let scoreTarget = 100;
 let powerupCostMode = 'tile'; // tile | points | either
 let powerupPointCost = 20;
-let netMode = 'multi';
+let netMode = 'local';
 let ws = null;
 let roomId = null;
 let isHost = false;
@@ -419,24 +470,31 @@ function decrementCooldown(playerIdx){
 }
 function canUsePower(power){
   if(!tilesOfWarEnabled) return false;
+  if(!powerupEnabled[power]) return false;
   if(turnInProgress || pendingPowerAction) return false;
   if(!playerHasLevel3(turnPlayer)) return false;
   return getPowerCooldown(turnPlayer, power) <= 0;
 }
 function updatePowerupUI(){
   if(!powerupBar) return;
-  if(!tilesOfWarEnabled){
+  const anyEnabled = tilesOfWarEnabled && Object.values(powerupEnabled || {}).some(Boolean);
+  if(!tilesOfWarEnabled || !anyEnabled){
     powerupBar.style.display = 'none';
     return;
   }
   powerupBar.style.display = 'flex';
   const baseReady = tilesOfWarEnabled && !turnInProgress && !pendingPowerAction && playerHasLevel3(turnPlayer);
-  if(activePowerup && (!baseReady || getPowerCooldown(turnPlayer, activePowerup) > 0)){
+  if(activePowerup && (!baseReady || !powerupEnabled[activePowerup] || getPowerCooldown(turnPlayer, activePowerup) > 0)){
     activePowerup = null;
   }
   [powerupRomboidBtn,powerupViewfinderBtn,powerupWallBtn].forEach(btn=>{
     if(!btn) return;
     const id = btn.id === 'powerupRomboid' ? 'romboid' : (btn.id==='powerupViewfinder' ? 'viewfinder' : 'wall');
+    if(!powerupEnabled[id]){
+      btn.style.display = 'none';
+      return;
+    }
+    btn.style.display = '';
     const readyThis = baseReady && getPowerCooldown(turnPlayer, id) <= 0;
     btn.disabled = !readyThis;
     btn.classList.remove('active');
@@ -470,6 +528,9 @@ function postNews(text, color){
   const meta = document.createElement('div'); meta.className = 'news-meta'; const ts = new Date(); meta.textContent = ts.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   item.appendChild(dot); item.appendChild(content); item.appendChild(meta);
   newsFeed.appendChild(item);
+  while(newsFeed.children.length > 100){
+    newsFeed.removeChild(newsFeed.firstElementChild);
+  }
   if(atBottom) { newsFeed.scrollTop = newsFeed.scrollHeight; }
 }
 
@@ -679,10 +740,8 @@ window.onload = () => {
   // Sync numbers toggle on load (default unchecked)
   showNumbers = !!toggleNumbersCheckbox.checked;
   
-  // Default to Multiplayer UI
-  if(netModeToggle) netModeToggle.textContent = 'Multiplayer';
-  if(netButtons) netButtons.style.display = 'flex';
-  if(netStatusRow) netStatusRow.style.display = 'flex';
+  // Default to Local UI
+  if(netModeToggle) netModeToggle.textContent = 'Local (offline)';
 
   setNetUI();
   attachHostSyncListeners();
@@ -852,6 +911,8 @@ if(syncStateBtn){
   };
 }
 function togglePowerSelection(power){
+  if(isPaused) return;
+  if(!powerupEnabled[power]) return;
   // cancel pending second step of the same power
   if(pendingPowerAction && pendingPowerAction.type === power){
     pendingPowerAction = null;
@@ -876,6 +937,107 @@ function togglePowerSelection(power){
 if(powerupRomboidBtn){ powerupRomboidBtn.onclick = ()=> togglePowerSelection('romboid'); }
 if(powerupViewfinderBtn){ powerupViewfinderBtn.onclick = ()=> togglePowerSelection('viewfinder'); }
 if(powerupWallBtn){ powerupWallBtn.onclick = ()=> togglePowerSelection('wall'); }
+if(pauseGameButton){ pauseGameButton.onclick = () => pauseGame(); }
+if(resumeBtn){ resumeBtn.onclick = () => resumeGame(); }
+if(pauseRestartBtn){ pauseRestartBtn.onclick = () => openConfirmOverlay('restart'); }
+if(pauseExitBtn){ pauseExitBtn.onclick = () => openConfirmOverlay('exit'); }
+if(confirmYesBtn){
+  confirmYesBtn.onclick = () => {
+    if(pendingConfirmAction === 'restart' || pendingConfirmAction === 'exit'){
+      restartGame();
+    }
+    closeConfirmOverlay();
+  };
+}
+function updatePowerupOptionsVisibility(){
+  if(!powerupOptionsWrap || !tilesOfWarToggle) return;
+  const show = !!tilesOfWarToggle.checked;
+  powerupOptionsWrap.setAttribute('aria-hidden', show ? 'false' : 'true');
+}
+if(tilesOfWarToggle){
+  tilesOfWarToggle.addEventListener('change', () => {
+    updatePowerupOptionsVisibility();
+    updatePowerupUI();
+  });
+}
+if(powerupRomboidToggle){ powerupRomboidToggle.addEventListener('change', () => updatePowerupUI()); }
+if(powerupViewfinderToggle){ powerupViewfinderToggle.addEventListener('change', () => updatePowerupUI()); }
+if(powerupWallToggle){ powerupWallToggle.addEventListener('change', () => updatePowerupUI()); }
+updatePowerupOptionsVisibility();
+if(confirmNoBtn){ confirmNoBtn.onclick = () => closeConfirmOverlay(); }
+
+function openConfirmOverlay(action){
+  pendingConfirmAction = action;
+  if(confirmTitle) confirmTitle.textContent = "Are you sure?";
+  if(confirmMessage){
+    confirmMessage.textContent = action === 'restart'
+      ? "Are you sure you want to restart?"
+      : "Are you sure you want to exit?";
+  }
+  if(confirmOverlay){
+    confirmOverlay.classList.remove('overlay-hidden');
+  }
+}
+
+function closeConfirmOverlay(){
+  pendingConfirmAction = null;
+  if(confirmOverlay){
+    confirmOverlay.classList.add('overlay-hidden');
+  }
+}
+
+function pauseGame(){
+  if(isPaused) return;
+  isPaused = true;
+  if(turnTimerTimeoutId) clearTimeout(turnTimerTimeoutId);
+  if(turnTimerIntervalId) clearInterval(turnTimerIntervalId);
+  if(suddenDeathIntervalId) clearInterval(suddenDeathIntervalId);
+  if(turnWatchdog) clearTimeout(turnWatchdog);
+  if(aiMoveTimeoutId){
+    clearTimeout(aiMoveTimeoutId);
+    aiMoveTimeoutId = null;
+  }
+  if(isAIPlayer[turnPlayer]){
+    pendingAIMovePlayer = turnPlayer;
+  }
+  gsap.globalTimeline.pause();
+  if(gameDiv) gameDiv.classList.add('paused');
+  if(pauseOverlay) pauseOverlay.classList.remove('overlay-hidden');
+}
+
+function resumeGame(){
+  if(!isPaused) return;
+  isPaused = false;
+  gsap.globalTimeline.resume();
+  if(gameDiv) gameDiv.classList.remove('paused');
+  if(pauseOverlay) pauseOverlay.classList.add('overlay-hidden');
+  if(confirmOverlay) confirmOverlay.classList.add('overlay-hidden');
+  if(turnInProgress || animationsInProgress > 0){
+    resetTurnWatchdog();
+  }
+  if(turnTimeRemaining > 0){
+    startTurnTimer(false);
+  }
+  if(suddenDeathEnabled){
+    startSuddenDeathTimer(false);
+  }
+  if(pendingAIMovePlayer !== null){
+    scheduleAIMove(pendingAIMovePlayer, 400);
+    pendingAIMovePlayer = null;
+  }
+}
+
+function scheduleAIMove(playerIndex, delay = 1000){
+  if(isPaused){
+    pendingAIMovePlayer = playerIndex;
+    return;
+  }
+  if(aiMoveTimeoutId) clearTimeout(aiMoveTimeoutId);
+  aiMoveTimeoutId = setTimeout(() => {
+    aiMoveTimeoutId = null;
+    performAIMove(playerIndex);
+  }, delay);
+}
 
 function syncVariablesFromUI(){
   gridWidthNum       = parseInt(widthSelect.value, 10);
@@ -898,6 +1060,16 @@ function syncVariablesFromUI(){
   powerupCostMode = (powerupCostModeSelect && powerupCostModeSelect.value) || 'tile';
   powerupPointCost = Math.max(0, parseInt(powerupPointCostInput ? powerupPointCostInput.value : '20', 10) || 0);
   tilesOfWarEnabled = !!(tilesOfWarToggle && tilesOfWarToggle.checked);
+  powerupEnabled = {
+    romboid: !!(powerupRomboidToggle && powerupRomboidToggle.checked),
+    viewfinder: !!(powerupViewfinderToggle && powerupViewfinderToggle.checked),
+    wall: !!(powerupWallToggle && powerupWallToggle.checked)
+  };
+  if(!powerupEnabled.romboid && !powerupEnabled.viewfinder && !powerupEnabled.wall){
+    activePowerup = null;
+    pendingPowerAction = null;
+    clearWallPreview();
+  }
   showDefeatPopup = !!(showDefeatPopupToggle && showDefeatPopupToggle.checked);
   powerupCooldownTurns = Math.max(0, Math.min(10, parseInt(powerupCooldownInput ? powerupCooldownInput.value : '2', 10) || 0));
   powerupCooldownMode = (powerupCooldownModeSelect && powerupCooldownModeSelect.value) || 'block';
@@ -910,6 +1082,7 @@ function attachHostSyncListeners(){
     showShrinkCounterToggle, shrinkAnimSelect, shrinkEnabledToggle,
     shrinkCoverageToggle, shrinkCoverageInput, specialTilesToggle,
     specialTilesIntervalInput, specialTilesDurationInput, tilesOfWarToggle,
+    powerupRomboidToggle, powerupViewfinderToggle, powerupWallToggle,
     showDefeatPopupToggle,
     powerupCooldownInput, powerupCooldownModeSelect, scoreTargetInput,
     powerupCostModeSelect, powerupPointCostInput
@@ -938,7 +1111,15 @@ startBtn.onclick = () => {
     return;
   }
   
+  isPaused = false;
+  pendingAIMovePlayer = null;
+  if(aiMoveTimeoutId){ clearTimeout(aiMoveTimeoutId); aiMoveTimeoutId = null; }
+  gsap.globalTimeline.resume();
+  if(gameDiv) gameDiv.classList.remove('paused');
+  if(pauseOverlay) pauseOverlay.classList.add('overlay-hidden');
+  if(confirmOverlay) confirmOverlay.classList.add('overlay-hidden');
   syncVariablesFromUI();
+  updatePowerupOptionsVisibility();
 
   // Parametri principali
   totalPlayers       = parseInt(playerSelect.value, 10);
@@ -989,9 +1170,12 @@ startBtn.onclick = () => {
     pixiContainer.removeChild(app.view);
   }
 
-  // Calcola la dimensione delle caselle (in base ai parametri che vuoi)
-  // Per semplicità usiamo sempre tileSize = 60, oppure calcolalo diversamente
-  tileSize = 60;
+  // Mostra la schermata di gioco per misurare lo spazio disponibile
+  menuDiv.style.display = "none";
+  gameDiv.style.display = "flex";
+
+  // Calcola la dimensione delle caselle per far stare tutta la griglia in vista
+  tileSize = computeTileSizeForViewport();
 
   // Seleziona i colori e imposta i conteggi a 0
   playerColors = possibleColors.slice(0, totalPlayers);
@@ -1031,7 +1215,10 @@ startBtn.onclick = () => {
   // Nascondi menu e mostra container di gioco
   menuDiv.style.display = "none";
   gameDiv.style.display = "flex";
-  if(newsBox){ newsBox.setAttribute('aria-hidden','false'); }
+  if(newsBox){
+    newsBox.style.display = 'flex';
+    newsBox.setAttribute('aria-hidden','false');
+  }
   if(shrinkCounterDisplayElem){
     shrinkCounterDisplayElem.style.display = showShrinkCounter ? 'inline' : 'none';
   }
@@ -1094,6 +1281,7 @@ function startNewGame(){
   turnEnded = false;
   turnsTaken = 0;
   roundsCompleted = 0;
+  shrinkRoundsCompleted = 0;
   ringsApplied = 0;
   shrinkGateReached = !shrinkCoverageGateEnabled;
   shrinkCoverageTargetCount = 0;
@@ -1197,10 +1385,9 @@ function startNewGame(){
   }
 
   // Avvia il timer e/o la mossa AI
-  if(!isAIPlayer[turnPlayer]){
-    startTurnTimer();
-  } else {
-    setTimeout(() => performAIMove(turnPlayer), 1000);
+  startTurnTimer();
+  if(isAIPlayer[turnPlayer]){
+    scheduleAIMove(turnPlayer, 1000);
   }
 
   // Se abilitato, avvia il “sudden death”
@@ -1282,6 +1469,7 @@ function isMoveValid(x, y){
 }
 
 function handleTileClick(x, y){
+  if(isPaused) return;
   if(turnInProgress) return;
   if(netMode === 'multi' && awaitingSync && !suppressNetwork) return;
   if(netMode === 'multi' && !suppressNetwork && turnPlayer !== mySeat) return;
@@ -1611,10 +1799,9 @@ function endTurn(isRemoteOverride){
       awaitingSync = false;
     }
 
-    if(!isAIPlayer[turnPlayer]){
-      startTurnTimer();
-    } else {
-      setTimeout(() => performAIMove(turnPlayer), 1000);
+    startTurnTimer();
+    if(isAIPlayer[turnPlayer]){
+      scheduleAIMove(turnPlayer, 1000);
     }
     
     // Check if we have actions waiting for this new turn
@@ -1864,7 +2051,7 @@ function updateTileGraphics(tile){
   if(tile.isRock){
     tile.graphics.clear();
     tile.graphics.beginFill(0x000000);
-    tile.graphics.drawRoundedRect(0, 0, tileSize-2, tileSize-2, 10);
+    tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
     tile.graphics.endFill();
 
     tile.circle.clear();
@@ -1876,14 +2063,14 @@ function updateTileGraphics(tile){
   // Non è roccia: disegniamo cella chiara + contorno, ed eventuale highlight special
   tile.graphics.clear();
   tile.graphics.beginFill(0xf7f9fc);
-  tile.graphics.drawRoundedRect(0, 0, tileSize-2, tileSize-2, 10);
+  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
   tile.graphics.lineStyle(1, 0xE5E7EB, 1);
-  tile.graphics.drawRoundedRect(0, 0, tileSize-2, tileSize-2, 10);
+  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
   tile.graphics.endFill();
   tile.graphics.lineStyle(0);
   if(tile.specialTurns && tile.specialTurns>0){
     tile.graphics.lineStyle(3, 0xffc107, 0.9);
-    tile.graphics.drawRoundedRect(2, 2, tileSize-6, tileSize-6, 10);
+    tile.graphics.drawRoundedRect(3, 3, tileSize-6, tileSize-6, 10);
     tile.graphics.lineStyle(0);
   }
 
@@ -1916,22 +2103,30 @@ function updateTileGraphics(tile){
 
 /** Forza lo sfondo del body a un colore più chiaro di quello del giocatore di turno */
 function updateBackgroundForCurrentPlayer(){
+  const color = playerColors[turnPlayer] ?? 0x777777;
   if(tilesCount[turnPlayer] === 0 && !setupPhase){
     document.body.style.background = "#ddd";
-    return;
-  }
-  const color = playerColors[turnPlayer];
-  const YELLOW = 0xF9E43E;
-  const ORANGE = 0xFBBB1B;
-  let bg;
-  if(color === YELLOW){
-    bg = pastelDarker(color);
-  } else if(color === ORANGE){
-    bg = 0xD9A663; // requested RGB(217,166,99)
   } else {
-    bg = lightenColor(color, 0.6);
+    const YELLOW = 0xF9E43E;
+    const ORANGE = 0xFBBB1B;
+    let bg;
+    if(color === YELLOW){
+      bg = pastelDarker(color);
+    } else if(color === ORANGE){
+      bg = 0xD9A663; // requested RGB(217,166,99)
+    } else {
+      bg = lightenColor(color, 0.6);
+    }
+    document.body.style.backgroundColor = "#" + bg.toString(16).padStart(6, "0");
   }
-  document.body.style.backgroundColor = "#" + bg.toString(16).padStart(6, "0");
+  if(timerDisplayElem){
+    const timerBg = mixColors(color, 0xffffff, 0.4);
+    const timerAccent = darkenColor(color, 0.25);
+    const timerInk = darkenColor(color, 0.55);
+    timerDisplayElem.style.setProperty('--timer-bg', `#${timerBg.toString(16).padStart(6, '0')}`);
+    timerDisplayElem.style.setProperty('--timer-accent', `#${timerAccent.toString(16).padStart(6, '0')}`);
+    timerDisplayElem.style.setProperty('--timer-ink', `#${timerInk.toString(16).padStart(6, '0')}`);
+  }
 }
 
 function lightenColor(hexColor, amount){
@@ -2039,9 +2234,11 @@ function suddenDeathTick(){
   updateLeaderboard();
 }
 
-function startSuddenDeathTimer(){
+function startSuddenDeathTimer(reset = true){
   if(suddenDeathIntervalId) clearInterval(suddenDeathIntervalId);
-  suddenDeathTimeRemaining = suddenDeathTimerSeconds;
+  if(reset){
+    suddenDeathTimeRemaining = suddenDeathTimerSeconds;
+  }
 
   suddenDeathIntervalId = setInterval(() => {
     suddenDeathTimeRemaining--;
@@ -2083,16 +2280,20 @@ function handleRoundProgression(isRemote = false){
 
       // DECISION: Is it time to shrink?
       if(shrinkEnabled){
+        const gateWasReached = shrinkGateReached;
         checkShrinkGate();
-        if(shrinkGateReached && roundsPerRing > 0 && roundsCompleted > 0 && roundsCompleted % roundsPerRing === 0){
-          console.log(`Shrink decided: Round ${roundsCompleted} matches setting ${roundsPerRing}.`);
+        if(shrinkGateReached && gateWasReached){
+          shrinkRoundsCompleted++;
+        }
+        if(shrinkGateReached && roundsPerRing > 0 && shrinkRoundsCompleted > 0 && shrinkRoundsCompleted % roundsPerRing === 0){
+          console.log(`Shrink decided: Gate rounds ${shrinkRoundsCompleted} matches setting ${roundsPerRing}.`);
           
           if(isRemote){
             console.log("Peer: pausing turn sequence, waiting for Host FX.");
             return true; 
           }
           
-          postNews(`Borders shrink inward. Outer ring turns to rock (Round ${roundsCompleted}).`, 0x222222);
+          postNews(`Borders shrink inward. Outer ring turns to rock.`, 0x222222);
           const started = (shrinkAnimMode === 'walls') ? animateShrinkingRingWalls(ringsApplied, false) : (shrinkAnimMode === 'falloff' ? animateShrinkingEdgeFallOff(ringsApplied, false) : animateShrinkingRingCascade(ringsApplied, false));
           if(started) {
             console.log("Shrink animation started. Turn sequence frozen.");
@@ -2407,53 +2608,136 @@ function animateShrinkingRingWalls(ringIndex, isRemote = false){
   return true;
 }
 
+let previewTweens = [];
+
+function clearPreviewTweens(){
+  previewTweens.forEach((tween) => tween.kill());
+  previewTweens = [];
+}
+
 function openPreview(){ previewModal.setAttribute('aria-hidden','false'); buildPreview(shrinkAnimSelect.value); }
-function closePreview(){ previewModal.setAttribute('aria-hidden','true'); previewStage.innerHTML=''; }
+function closePreview(){
+  previewModal.setAttribute('aria-hidden','true');
+  clearPreviewTweens();
+  previewStage.innerHTML='';
+}
 if(previewShrinkAnimBtn){ previewShrinkAnimBtn.onclick = openPreview; }
 if(closePreviewBtn){ closePreviewBtn.onclick = closePreview; }
 if(previewModal){ previewModal.addEventListener('click', (e)=>{ if(e.target===previewModal) closePreview(); }); }
 if(newsMinBtn){ newsMinBtn.onclick = () => { if(newsBox) newsBox.classList.toggle('collapsed'); }; }
 
 function buildPreview(mode){
+  clearPreviewTweens();
   previewStage.innerHTML = '';
-  const board = document.createElement('div'); board.className = 'pv-board'; previewStage.appendChild(board);
-  const cols = 8, rows = 6, cs = 24;
+  const board = document.createElement('div');
+  board.className = 'pv-board';
+  previewStage.appendChild(board);
+
+  const cols = 8;
+  const rows = 6;
+  const cellSize = 22;
+  const gap = 2;
+  const step = cellSize + gap;
+  const boardW = cols * step - gap;
+  const boardH = rows * step - gap;
+  board.style.width = `${boardW}px`;
+  board.style.height = `${boardH}px`;
+
+  const cells = [];
   for(let x=0;x<cols;x++){
+    cells[x] = [];
     for(let y=0;y<rows;y++){
-      const c = document.createElement('div'); c.className='pv-cell'; c.style.left = (10 + x* (cs-2))+'px'; c.style.top = (10 + y*(cs-2))+'px'; board.appendChild(c);
+      const c = document.createElement('div');
+      c.className = 'pv-cell';
+      c.style.left = `${x * step}px`;
+      c.style.top = `${y * step}px`;
+      board.appendChild(c);
+      cells[x][y] = c;
     }
   }
-  if(mode==='walls'){
-    const left = document.createElement('div'); left.className='pv-bar'; left.style.left='-120px'; left.style.top='-40px'; left.style.width='80px'; left.style.height='300px';
-    const right = left.cloneNode(); right.style.left='340px';
-    const top = document.createElement('div'); top.className='pv-bar'; top.style.left='-40px'; top.style.top='-120px'; top.style.width='380px'; top.style.height='80px';
-    const bottom = top.cloneNode(); bottom.style.top='260px';
-    [left,right,top,bottom].forEach(el=>previewStage.appendChild(el));
-    gsap.to(left, {duration:0.25, x: 140, ease:'power3.out'});
-    gsap.to(right,{duration:0.25, x:-140, ease:'power3.out'});
-    gsap.to(top,  {duration:0.25, y: 120, ease:'power3.out'});
-    gsap.to(bottom,{duration:0.25, y:-120, ease:'power3.out', onComplete:()=>{
-      gsap.to([left,right,top,bottom], {duration:0.18, opacity:0, ease:'power2.in'});
-    }});
-  } else {
-    const perimeter = [];
-    for(let x=0;x<cols;x++){ perimeter.push({x, y:0}); perimeter.push({x, y:rows-1}); }
-    for(let y=1;y<rows-1;y++){ perimeter.push({x:0, y}); perimeter.push({x:cols-1, y}); }
-    let idx=0;
-    const drop = ()=>{
-      if(idx>=perimeter.length) return;
-      const p = perimeter[idx++];
-      const r = document.createElement('div'); r.className='pv-rock';
-      const tx = 10 + p.x*(cs-2); const ty = 10 + p.y*(cs-2);
-      r.style.left = (tx+140)+'px'; r.style.top = (-80)+'px'; r.style.transform='scale(2.2)'; r.style.opacity='0.95';
-      previewStage.appendChild(r);
-      gsap.to(r, {duration:0.28, left: (tx+140)+'px', top: (ty+40)+'px', scale:1, ease:'power3.in', onComplete:()=>{
-        gsap.to(r, {duration:0.2, opacity:0.2});
-      }});
-      setTimeout(drop, 16);
-    };
-    drop();
+
+  const perimeter = [];
+  for(let x=0;x<cols;x++){ perimeter.push({x, y:0}); perimeter.push({x, y:rows-1}); }
+  for(let y=1;y<rows-1;y++){ perimeter.push({x:0, y}); perimeter.push({x:cols-1, y}); }
+
+  if(mode === 'walls'){
+    const thickness = Math.round(step * 1.2);
+    const left = document.createElement('div'); left.className = 'pv-bar';
+    left.style.left = `${-step * 2}px`; left.style.top = `${-step * 2}px`;
+    left.style.width = `${thickness}px`; left.style.height = `${boardH + step * 4}px`;
+    const right = left.cloneNode(); right.style.left = `${boardW + step}px`;
+    const top = document.createElement('div'); top.className = 'pv-bar';
+    top.style.left = `${-step * 2}px`; top.style.top = `${-step * 2}px`;
+    top.style.width = `${boardW + step * 4}px`; top.style.height = `${thickness}px`;
+    const bottom = top.cloneNode(); bottom.style.top = `${boardH + step}px`;
+    [left,right,top,bottom].forEach(el => board.appendChild(el));
+    const leftTarget = -step * 0.1;
+    const rightTarget = boardW + step * 0.1;
+    const topTarget = -step * 0.1;
+    const bottomTarget = boardH + step * 0.1;
+    previewTweens.push(gsap.to(left, {duration:0.25, x: leftTarget - (-step * 2), ease:'power3.out'}));
+    previewTweens.push(gsap.to(right,{duration:0.25, x: rightTarget - (boardW + step), ease:'power3.out'}));
+    previewTweens.push(gsap.to(top,  {duration:0.25, y: topTarget - (-step * 2), ease:'power3.out'}));
+    previewTweens.push(gsap.to(bottom,{duration:0.25, y: bottomTarget - (boardH + step), ease:'power3.out', onComplete:()=>{
+      perimeter.forEach(({x,y}) => { cells[x][y].style.background = '#0f172a'; });
+      previewTweens.push(gsap.to([left,right,top,bottom], {duration:0.18, opacity:0, ease:'power2.in'}));
+    }}));
+    return;
   }
+
+  if(mode === 'falloff'){
+    perimeter.forEach(({x,y}, idx) => {
+      const cell = cells[x][y];
+      const rot = (idx % 2 === 0 ? -1 : 1) * (0.1 + (idx % 5) * 0.04);
+      const delay = idx * 0.02;
+      cell.style.transformOrigin = '50% 50%';
+      previewTweens.push(gsap.to(cell, {
+        duration: 0.35,
+        delay,
+        ease: "power2.in",
+        y: boardH + step * 2,
+        rotation: rot,
+        opacity: 0,
+        onComplete: () => { cell.style.display = 'none'; }
+      }));
+    });
+    return;
+  }
+
+  perimeter.forEach(({x,y}, idx) => {
+    const r = document.createElement('div');
+    r.className = 'pv-rock';
+    const tx = x * step;
+    const ty = y * step;
+    const origin = idx % 3;
+    let startX = tx;
+    let startY = -step * 4;
+    if(origin === 1){
+      startX = -step * 4;
+      startY = ty - step;
+    } else if(origin === 2){
+      startX = boardW + step * 3;
+      startY = ty - step;
+    }
+    r.style.left = `${startX}px`;
+    r.style.top = `${startY}px`;
+    r.style.transform = 'scale(2.1)';
+    r.style.opacity = '0.95';
+    board.appendChild(r);
+    const delay = idx * 0.03;
+    previewTweens.push(gsap.to(r, {
+      duration:0.32,
+      delay,
+      left: `${tx}px`,
+      top: `${ty}px`,
+      scale: 1,
+      ease:'power3.in',
+      onComplete: () => {
+        cells[x][y].style.background = '#0f172a';
+        previewTweens.push(gsap.to(r, {duration:0.2, opacity:0.2, onComplete:()=>r.remove()}));
+      }
+    }));
+  });
 }
 
 /* ----------------------------------------------------------------
@@ -2542,14 +2826,17 @@ function subtleShake(){
 /* ----------------------------------------------------------------
    11) TURN TIMER FUNCTIONS
 ---------------------------------------------------------------- */
-function startTurnTimer(){
-  if(isAIPlayer[turnPlayer]) return;
+function startTurnTimer(reset = true){
   if(netMode === 'multi' && awaitingSync) return;
 
   if(turnTimerTimeoutId) clearTimeout(turnTimerTimeoutId);
   if(turnTimerIntervalId) clearInterval(turnTimerIntervalId);
 
-  turnTimeRemaining = turnTimerSeconds;
+  if(reset){
+    turnTimeRemaining = turnTimerSeconds;
+  }
+  updateTimerDisplay();
+  const timerDuration = Math.max(0, turnTimeRemaining);
   turnTimerIntervalId = setInterval(() => {
     turnTimeRemaining--;
     if(turnTimeRemaining < 0) turnTimeRemaining = 0;
@@ -2567,7 +2854,7 @@ function startTurnTimer(){
     } else {
       console.log("Turn timer expired. Waiting for Host/Active player sync...");
     }
-  }, turnTimerSeconds * 1000);
+  }, timerDuration * 1000);
 }
 
 /* ----------------------------------------------------------------
@@ -2613,6 +2900,7 @@ function checkShrinkGate(){
   const occupied = countOccupiedTiles();
   if(occupied >= shrinkCoverageTargetCount){
     shrinkGateReached = true;
+    shrinkRoundsCompleted = 0;
     postNews("Shrinkage is coming — coverage reached threshold.", 0x222222);
   }
 }
@@ -3138,6 +3426,10 @@ function buildDefeatBestMove(playerIdx){
    16) AI PLAYER FUNCTIONS
 ---------------------------------------------------------------- */
 function performAIMove(playerIndex){
+  if(isPaused){
+    pendingAIMovePlayer = playerIndex;
+    return;
+  }
   if(turnInProgress || setupPhase) return;
   
   // MULTIPLAYER SYNC: Only the Room Host triggers AI logic and broadcasts it.
@@ -3244,15 +3536,48 @@ function performAIMove(playerIndex){
    17) TIMER DISPLAY UPDATE
 ---------------------------------------------------------------- */
 function updateTimerDisplay(){
-  turnTimerDisplayElem.textContent = "Turn Timer: " + turnTimeRemaining + "s";
-  if(suddenDeathEnabled){
-    suddenDeathTimerDisplayElem.textContent = "Sudden Death Timer: " + suddenDeathTimeRemaining + "s";
-  } else {
-    suddenDeathTimerDisplayElem.textContent = "Sudden Death Timer: Off";
+  const hideTurnTimer = turnInProgress || animationsInProgress > 0;
+  if(turnTimerDisplayElem){
+    if(hideTurnTimer){
+      turnTimerDisplayElem.style.visibility = 'hidden';
+    } else {
+      turnTimerDisplayElem.style.visibility = 'visible';
+      turnTimerDisplayElem.textContent = "Turn Timer: " + turnTimeRemaining + "s";
+    }
+  }
+  if(suddenDeathTimerDisplayElem){
+    if(suddenDeathEnabled){
+      suddenDeathTimerDisplayElem.style.display = 'inline';
+      suddenDeathTimerDisplayElem.textContent = "Sudden Death Timer: " + suddenDeathTimeRemaining + "s";
+    } else {
+      suddenDeathTimerDisplayElem.style.display = 'none';
+    }
+  }
+  const shrinkGateActive = shrinkEnabled && shrinkCoverageGateEnabled;
+  const waitingForShrinkGate = shrinkGateActive && !shrinkGateReached;
+  if(shrinkCoverageBufferElem){
+    if(waitingForShrinkGate){
+      let target = shrinkCoverageTargetCount > 0 ? shrinkCoverageTargetCount : 0;
+      if(target <= 0 && grid && grid.length){
+        target = Math.max(1, Math.ceil(countPlayableCells() * (shrinkCoveragePercent/100)));
+      }
+      if(target <= 0) target = 1;
+      const occupied = (grid && grid.length) ? countOccupiedTiles() : 0;
+      const ratio = target > 0 ? Math.min(1, occupied / target) : 0;
+      if(shrinkCoverageFillElem) shrinkCoverageFillElem.style.width = `${Math.round(ratio * 100)}%`;
+      if(shrinkCoverageLabelElem){
+        shrinkCoverageLabelElem.textContent = "Shrink gate buffering...";
+      }
+      shrinkCoverageBufferElem.style.display = 'flex';
+      shrinkCoverageBufferElem.setAttribute('aria-hidden', 'false');
+    } else {
+      shrinkCoverageBufferElem.style.display = 'none';
+      shrinkCoverageBufferElem.setAttribute('aria-hidden', 'true');
+    }
   }
   if(shrinkCounterDisplayElem){
-    if(showShrinkCounter){
-      const mod = roundsPerRing > 0 ? (roundsCompleted % roundsPerRing) : 0;
+    if(showShrinkCounter && shrinkEnabled && !waitingForShrinkGate){
+      const mod = roundsPerRing > 0 ? (shrinkRoundsCompleted % roundsPerRing) : 0;
       const left = roundsPerRing > 0 ? (mod === 0 ? roundsPerRing : (roundsPerRing - mod)) : 0;
       shrinkCounterDisplayElem.style.display = 'inline';
       shrinkCounterDisplayElem.textContent = `Shrink in: ${left} round${left===1?'':'s'}`;
@@ -3279,6 +3604,15 @@ function restartGame(){
   if(turnTimerTimeoutId) clearTimeout(turnTimerTimeoutId);
   if(turnTimerIntervalId) clearInterval(turnTimerIntervalId);
   if(suddenDeathIntervalId) clearInterval(suddenDeathIntervalId);
+  if(turnWatchdog) clearTimeout(turnWatchdog);
+  if(aiMoveTimeoutId) clearTimeout(aiMoveTimeoutId);
+  aiMoveTimeoutId = null;
+  pendingAIMovePlayer = null;
+  isPaused = false;
+  gsap.globalTimeline.resume();
+  if(gameDiv) gameDiv.classList.remove('paused');
+  if(pauseOverlay) pauseOverlay.classList.add('overlay-hidden');
+  if(confirmOverlay) confirmOverlay.classList.add('overlay-hidden');
   startingPeers = [];
 
   endgameOverlay.style.display = "none";
@@ -3286,7 +3620,10 @@ function restartGame(){
   app = null;
   gameDiv.style.display = "none";
   menuDiv.style.display = "flex";
-  if(newsBox){ newsBox.setAttribute('aria-hidden','true'); }
+  if(newsBox){
+    newsBox.style.display = 'none';
+    newsBox.setAttribute('aria-hidden','true');
+  }
 
   // Riapriamo il menu forzando l’aggiornamento del select
   playerSelect.dispatchEvent(new Event('change'));
@@ -3406,7 +3743,7 @@ function buildSnapshot(){
   return {
     gridWidthNum, gridHeightNum,
     turnPlayer, tilesCount, playerPointsCurrent, playerBonusPoints,
-    roundsCompleted, turnsTaken, ringsApplied,
+    roundsCompleted, shrinkRoundsCompleted, turnsTaken, ringsApplied,
     shrinkGateReached, shrinkEnabled,
     wallEdges: Array.from(wallEdges),
     activeSpecialTiles: Array.from(activeSpecialTiles),
@@ -3420,6 +3757,7 @@ function buildSnapshot(){
       shrinkCoverageGateEnabled, shrinkCoveragePercent, showShrinkCounter,
       shrinkAnimMode, specialTilesEnabled, specialTilesInterval,
       scoreTarget, powerupCostMode, powerupPointCost, tilesOfWarEnabled,
+      powerupEnabled,
       showDefeatPopup,
       powerupCooldownTurns, powerupCooldownMode
     },
@@ -3483,6 +3821,7 @@ function applySnapshot(snap){
     powerupCostMode = c.powerupCostMode;
     powerupPointCost = c.powerupPointCost;
     tilesOfWarEnabled = c.tilesOfWarEnabled;
+    powerupEnabled = c.powerupEnabled || powerupEnabled;
     showDefeatPopup = (typeof c.showDefeatPopup === 'boolean') ? c.showDefeatPopup : showDefeatPopup;
     powerupCooldownTurns = c.powerupCooldownTurns;
     powerupCooldownMode = c.powerupCooldownMode;
@@ -3506,6 +3845,10 @@ function applySnapshot(snap){
     if(powerupCostModeSelect) powerupCostModeSelect.value = powerupCostMode;
     if(powerupPointCostInput) powerupPointCostInput.value = String(powerupPointCost);
     if(tilesOfWarToggle) tilesOfWarToggle.checked = tilesOfWarEnabled;
+    if(powerupRomboidToggle) powerupRomboidToggle.checked = !!powerupEnabled.romboid;
+    if(powerupViewfinderToggle) powerupViewfinderToggle.checked = !!powerupEnabled.viewfinder;
+    if(powerupWallToggle) powerupWallToggle.checked = !!powerupEnabled.wall;
+    updatePowerupOptionsVisibility();
     if(showDefeatPopupToggle) showDefeatPopupToggle.checked = showDefeatPopup;
     if(powerupCooldownInput) powerupCooldownInput.value = String(powerupCooldownTurns);
     if(powerupCooldownModeSelect) powerupCooldownModeSelect.value = powerupCooldownMode;
@@ -3523,7 +3866,9 @@ function applySnapshot(snap){
     // bootstrap viewer
     totalPlayers = snap.tilesCount ? snap.tilesCount.length : totalPlayers || 4;
     playerColors = possibleColors.slice(0,totalPlayers);
-    tileSize = 60;
+    menuDiv.style.display="none";
+    gameDiv.style.display="flex";
+    tileSize = computeTileSizeForViewport();
     const w = gridWidthNum * tileSize;
     const h = gridHeightNum * tileSize;
     app = new PIXI.Application({
@@ -3557,7 +3902,10 @@ function applySnapshot(snap){
     }
     menuDiv.style.display="none";
     gameDiv.style.display="flex";
-    if(newsBox){ newsBox.setAttribute('aria-hidden','false'); }
+    if(newsBox){
+      newsBox.style.display = 'flex';
+      newsBox.setAttribute('aria-hidden','false');
+    }
     initializeLeaderboard();
   } else {
     if(!leaderboardEntries || leaderboardEntries.length !== totalPlayers){
@@ -3569,6 +3917,7 @@ function applySnapshot(snap){
   playerPointsCurrent = snap.playerPointsCurrent ?? playerPointsCurrent;
   playerBonusPoints = snap.playerBonusPoints ?? playerBonusPoints;
   roundsCompleted = snap.roundsCompleted ?? roundsCompleted;
+  shrinkRoundsCompleted = snap.shrinkRoundsCompleted ?? shrinkRoundsCompleted;
   turnsTaken = snap.turnsTaken ?? turnsTaken;
   ringsApplied = snap.ringsApplied ?? ringsApplied;
   shrinkGateReached = !!snap.shrinkGateReached;
@@ -3622,7 +3971,7 @@ function applySnapshot(snap){
   }
 
   // Restart timer for the new turn
-  if(!isAIPlayer[turnPlayer]) startTurnTimer();
+  startTurnTimer();
   processPendingActions();
 }
 function handleIncomingAction(action){
