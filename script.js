@@ -41,6 +41,7 @@ const specialTilesIntervalInput = document.getElementById("specialTilesInterval"
 const specialTilesDurationInput = document.getElementById("specialTilesDuration");
 const tilesOfWarToggle = document.getElementById("tilesOfWarToggle");
 const showDefeatPopupToggle = document.getElementById("showDefeatPopupToggle");
+const newsToggle = document.getElementById("newsToggle");
 const powerupCooldownInput = document.getElementById("powerupCooldownInput");
 const powerupCooldownModeSelect = document.getElementById("powerupCooldownMode");
 const scoreTargetInput = document.getElementById("scoreTargetInput");
@@ -257,6 +258,7 @@ let shrinkCoverageTargetCount = 0;
 let tilesOfWarEnabled = false;
 let powerupEnabled = { romboid: true, viewfinder: true, wall: true };
 let showDefeatPopup = !!(showDefeatPopupToggle && showDefeatPopupToggle.checked);
+let newsEnabled = !!(newsToggle && newsToggle.checked);
 let powerupCooldownTurns = 2;
 let powerupCooldownMode = 'block'; // block or perPower
 let powerupCooldowns = [];
@@ -526,7 +528,7 @@ function updatePowerupUI(){
 }
 
 function postNews(text, color){
-  if(!newsFeed) return;
+  if(!newsFeed || !newsEnabled) return;
   const atBottom = (newsFeed.scrollTop + newsFeed.clientHeight) >= (newsFeed.scrollHeight - 8);
   const item = document.createElement('div'); item.className = 'news-item';
   const dot = document.createElement('span'); dot.className = 'news-dot'; dot.style.backgroundColor = `#${color.toString(16).padStart(6,'0')}`;
@@ -960,16 +962,30 @@ function updatePowerupOptionsVisibility(){
   const show = !!tilesOfWarToggle.checked;
   powerupOptionsWrap.setAttribute('aria-hidden', show ? 'false' : 'true');
 }
+function updateNewsVisibility(){
+  if(!newsBox) return;
+  const show = !!newsEnabled && !!gameDiv && gameDiv.style.display !== 'none';
+  newsBox.style.display = show ? 'flex' : 'none';
+  newsBox.setAttribute('aria-hidden', show ? 'false' : 'true');
+  if(!show && newsFeed) newsFeed.innerHTML = '';
+}
 if(tilesOfWarToggle){
   tilesOfWarToggle.addEventListener('change', () => {
     updatePowerupOptionsVisibility();
     updatePowerupUI();
   });
 }
+if(newsToggle){
+  newsToggle.addEventListener('change', () => {
+    newsEnabled = !!newsToggle.checked;
+    updateNewsVisibility();
+  });
+}
 if(powerupRomboidToggle){ powerupRomboidToggle.addEventListener('change', () => updatePowerupUI()); }
 if(powerupViewfinderToggle){ powerupViewfinderToggle.addEventListener('change', () => updatePowerupUI()); }
 if(powerupWallToggle){ powerupWallToggle.addEventListener('change', () => updatePowerupUI()); }
 updatePowerupOptionsVisibility();
+updateNewsVisibility();
 if(confirmNoBtn){ confirmNoBtn.onclick = () => closeConfirmOverlay(); }
 
 function openConfirmOverlay(action){
@@ -1077,6 +1093,7 @@ function syncVariablesFromUI(){
     clearWallPreview();
   }
   showDefeatPopup = !!(showDefeatPopupToggle && showDefeatPopupToggle.checked);
+  newsEnabled = !!(newsToggle && newsToggle.checked);
   powerupCooldownTurns = Math.max(0, Math.min(10, parseInt(powerupCooldownInput ? powerupCooldownInput.value : '2', 10) || 0));
   powerupCooldownMode = (powerupCooldownModeSelect && powerupCooldownModeSelect.value) || 'block';
 }
@@ -1088,6 +1105,7 @@ function attachHostSyncListeners(){
     showShrinkCounterToggle, shrinkAnimSelect, shrinkEnabledToggle,
     shrinkCoverageToggle, shrinkCoverageInput, specialTilesToggle,
     specialTilesIntervalInput, specialTilesDurationInput, tilesOfWarToggle,
+    newsToggle,
     powerupRomboidToggle, powerupViewfinderToggle, powerupWallToggle,
     showDefeatPopupToggle,
     powerupCooldownInput, powerupCooldownModeSelect, scoreTargetInput,
@@ -1126,6 +1144,7 @@ startBtn.onclick = () => {
   if(confirmOverlay) confirmOverlay.classList.add('overlay-hidden');
   syncVariablesFromUI();
   updatePowerupOptionsVisibility();
+  updateNewsVisibility();
 
   // Parametri principali
   totalPlayers       = parseInt(playerSelect.value, 10);
@@ -1221,10 +1240,7 @@ startBtn.onclick = () => {
   // Nascondi menu e mostra container di gioco
   menuDiv.style.display = "none";
   gameDiv.style.display = "flex";
-  if(newsBox){
-    newsBox.style.display = 'flex';
-    newsBox.setAttribute('aria-hidden','false');
-  }
+  updateNewsVisibility();
   if(shrinkCounterDisplayElem){
     shrinkCounterDisplayElem.style.display = showShrinkCounter ? 'inline' : 'none';
   }
@@ -1712,6 +1728,10 @@ function killAllAnimations(){
             gsap.killTweensOf(t);
             gsap.killTweensOf(t.circle.scale);
             gsap.killTweensOf(t.circle);
+            t.isExploding = false;
+            t.alpha = 1;
+            if(!t.isVoid) t.visible = true;
+            updateTileGraphics(t);
         }
       }
     }
@@ -2048,6 +2068,10 @@ function getScaleForValue(v){
   return 0;
 }
 
+function getTileCornerRadius(){
+  return Math.max(6, Math.round(tileSize * 0.18));
+}
+
 /**
  * Disegna/ridisegna una tile in base allo stato (player, valore, rock, ecc.)
  */
@@ -2055,9 +2079,10 @@ function updateTileGraphics(tile){
   if(tile.isVoid){ tile.visible=false; return; }
   // Se è roccia, disegniamo un quadrato nero e basta
   if(tile.isRock){
+    const corner = getTileCornerRadius();
     tile.graphics.clear();
     tile.graphics.beginFill(0x000000);
-    tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
+    tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, corner);
     tile.graphics.endFill();
 
     tile.circle.clear();
@@ -2067,16 +2092,18 @@ function updateTileGraphics(tile){
   }
 
   // Non è roccia: disegniamo cella chiara + contorno, ed eventuale highlight special
+  const corner = getTileCornerRadius();
   tile.graphics.clear();
   tile.graphics.beginFill(0xf7f9fc);
-  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
+  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, corner);
   tile.graphics.lineStyle(1, 0xE5E7EB, 1);
-  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, 10);
+  tile.graphics.drawRoundedRect(1, 1, tileSize-2, tileSize-2, corner);
   tile.graphics.endFill();
   tile.graphics.lineStyle(0);
   if(tile.specialTurns && tile.specialTurns>0){
+    const innerCorner = Math.max(4, corner - 2);
     tile.graphics.lineStyle(3, 0xffc107, 0.9);
-    tile.graphics.drawRoundedRect(3, 3, tileSize-6, tileSize-6, 10);
+    tile.graphics.drawRoundedRect(3, 3, tileSize-6, tileSize-6, innerCorner);
     tile.graphics.lineStyle(0);
   }
 
@@ -2158,6 +2185,15 @@ function darkenColor(hexColor, amount){
 function pastelDarker(hexColor){
   const muted = mixColors(hexColor, 0xB0B0B0, 0.45);
   return darkenColor(muted, 0.08);
+}
+
+function countActivePlayers(){
+  if(setupPhase) return totalPlayers;
+  let active = 0;
+  for(let i = 0; i < totalPlayers; i++){
+    if((tilesCount[i] || 0) > 0 && !playerEliminated[i]) active++;
+  }
+  return Math.max(1, active);
 }
 
 function allButOneRemain(){
@@ -2271,7 +2307,8 @@ function handleRoundProgression(isRemote = false){
     console.log(`--- Status Check: Turn ${turnsTaken} completed ---`);
     
     // Check if a full round has passed (all alive players moved)
-    if(totalPlayers > 0 && turnsTaken % totalPlayers === 0){
+    const activePlayers = countActivePlayers();
+    if(activePlayers > 0 && turnsTaken % activePlayers === 0){
       roundsCompleted++;
       console.log(`--- Round ${roundsCompleted} finalized ---`);
       
@@ -2450,8 +2487,9 @@ function animateShrinkingRingCascade(ringIndex, isRemote = false){
     const {x, y} = cells[i++];
     const tile = grid[x][y];
     const block = new PIXI.Graphics();
+    const corner = getTileCornerRadius();
     block.beginFill(0x000000);
-    block.drawRoundedRect(0, 0, tileSize-2, tileSize-2, 10);
+    block.drawRoundedRect(0, 0, tileSize-2, tileSize-2, corner);
     block.endFill();
     const cx = tile.x + (tileSize-2)/2;
     const cy = tile.y + (tileSize-2)/2;
@@ -3542,14 +3580,9 @@ function performAIMove(playerIndex){
    17) TIMER DISPLAY UPDATE
 ---------------------------------------------------------------- */
 function updateTimerDisplay(){
-  const hideTurnTimer = turnInProgress || animationsInProgress > 0;
   if(turnTimerDisplayElem){
-    if(hideTurnTimer){
-      turnTimerDisplayElem.style.visibility = 'hidden';
-    } else {
-      turnTimerDisplayElem.style.visibility = 'visible';
-      turnTimerDisplayElem.textContent = "Turn Timer: " + turnTimeRemaining + "s";
-    }
+    turnTimerDisplayElem.style.visibility = 'visible';
+    turnTimerDisplayElem.textContent = "Turn Timer: " + turnTimeRemaining + "s";
   }
   if(suddenDeathTimerDisplayElem){
     if(suddenDeathEnabled){
@@ -3628,10 +3661,7 @@ function restartGame(){
   app = null;
   gameDiv.style.display = "none";
   menuDiv.style.display = "flex";
-  if(newsBox){
-    newsBox.style.display = 'none';
-    newsBox.setAttribute('aria-hidden','true');
-  }
+  updateNewsVisibility();
 
   // Riapriamo il menu forzando l’aggiornamento del select
   playerSelect.dispatchEvent(new Event('change'));
@@ -3767,6 +3797,7 @@ function buildSnapshot(){
       scoreTarget, powerupCostMode, powerupPointCost, tilesOfWarEnabled,
       powerupEnabled,
       showDefeatPopup,
+      newsEnabled,
       powerupCooldownTurns, powerupCooldownMode
     },
     cells
@@ -3831,6 +3862,7 @@ function applySnapshot(snap){
     tilesOfWarEnabled = c.tilesOfWarEnabled;
     powerupEnabled = c.powerupEnabled || powerupEnabled;
     showDefeatPopup = (typeof c.showDefeatPopup === 'boolean') ? c.showDefeatPopup : showDefeatPopup;
+    newsEnabled = (typeof c.newsEnabled === 'boolean') ? c.newsEnabled : newsEnabled;
     powerupCooldownTurns = c.powerupCooldownTurns;
     powerupCooldownMode = c.powerupCooldownMode;
 
@@ -3858,6 +3890,8 @@ function applySnapshot(snap){
     if(powerupWallToggle) powerupWallToggle.checked = !!powerupEnabled.wall;
     updatePowerupOptionsVisibility();
     if(showDefeatPopupToggle) showDefeatPopupToggle.checked = showDefeatPopup;
+    if(newsToggle) newsToggle.checked = newsEnabled;
+    updateNewsVisibility();
     if(powerupCooldownInput) powerupCooldownInput.value = String(powerupCooldownTurns);
     if(powerupCooldownModeSelect) powerupCooldownModeSelect.value = powerupCooldownMode;
   }
@@ -3910,10 +3944,7 @@ function applySnapshot(snap){
     }
     menuDiv.style.display="none";
     gameDiv.style.display="flex";
-    if(newsBox){
-      newsBox.style.display = 'flex';
-      newsBox.setAttribute('aria-hidden','false');
-    }
+    updateNewsVisibility();
     initializeLeaderboard();
   } else {
     if(!leaderboardEntries || leaderboardEntries.length !== totalPlayers){

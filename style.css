@@ -99,6 +99,12 @@ body {
   box-sizing: border-box;
   gap: 16px;
 }
+@media (max-width: 720px) {
+  #game-container {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
 
 /* Contenitore Pixi */
 #pixiContainer {
