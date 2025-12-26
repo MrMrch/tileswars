@@ -23,14 +23,8 @@
         <div class="form-group group-players">
           <div class="group-title">Players</div>
           <div class="form-row">
-            <label for="playerSelect">Number of players (1..6)</label>
-            <select id="playerSelect">
-              <option value="2" selected>2</option>
-              <option value="3">3</option>
-              <option value="4">4</option>
-              <option value="5">5</option>
-              <option value="6">6</option>
-            </select>
+            <label for="playerSelect">Number of players (2..10)</label>
+            <input type="number" id="playerSelect" min="2" max="10" value="4">
           </div>
           <div class="form-row">
             <label for="aiPlayerSelect">AI Players</label>
@@ -44,11 +38,11 @@
           <div class="group-title">Grid</div>
           <div class="form-row">
             <label for="widthSelect">Grid Width</label>
-            <input type="number" id="widthSelect" min="4" max="50" value="4">
+            <input type="number" id="widthSelect" min="4" max="50" value="11">
           </div>
           <div class="form-row">
             <label for="heightSelect">Grid Height</label>
-            <input type="number" id="heightSelect" min="4" max="50" value="4">
+            <input type="number" id="heightSelect" min="4" max="50" value="11">
           </div>
           <div class="form-row">
             <label for="rockCellInput">Number of Rock Cells</label>
@@ -80,9 +74,14 @@
               <option value="auto" selected>Automatic</option>
               <option value="manual">Manual</option>
               <option value="geometric">Geometric</option>
+              <option value="geometric2">Geometric 2</option>
             </select>
           </div>
           <div id="setupPreview" class="preset-preview" aria-live="polite"></div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="preformToggle">
+            Enable preform formations
+          </label>
           <div class="form-row">
             <label for="initValueSelect">Initial Tile Value</label>
             <select id="initValueSelect">
@@ -259,6 +258,20 @@
       </div>
     </div>
     <div id="pixiContainer"></div>
+    <div id="preformMenu" aria-hidden="true">
+      <div class="preform-header">
+        <span id="preformTitle">Preform</span>
+      </div>
+      <div class="preform-controls">
+        <button id="preformPrevBtn" type="button">◀</button>
+        <div id="preformPreview" class="preform-preview"></div>
+        <button id="preformNextBtn" type="button">▶</button>
+      </div>
+      <div class="preform-actions">
+        <button id="preformRotateBtn" type="button">Rotate</button>
+      </div>
+      <div class="preform-hint">Click a tile to place inside your quadrant.</div>
+    </div>
     <div id="leaderboard">
       <h2 style="text-align:center; margin-bottom: 10px;">Leaderboard</h2>
       <!-- Leaderboard entries generati dinamicamente -->

@@ -7,8 +7,25 @@ const possibleColors = [
   0x35920D, // Green
   0xF9E43E, // Yellow
   0xB75DF3, // Purple
-  0xFBBB1B  // Orange
+  0xFBBB1B, // Orange
+  0x00B8D9, // Cyan
+  0xFF6F61, // Coral
+  0x8BC34A, // Lime
+  0x6D4C41  // Brown
 ];
+const possibleStrokeColors = [
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  0x0d3b66, // Cyan border
+  0x2e294e, // Coral border
+  0x1b5e20, // Lime border
+  0x263238  // Brown border
+];
+const maxSelectablePlayers = possibleColors.length;
 
 const menuDiv        = document.getElementById("menu");
 const gameDiv        = document.getElementById("game-container");
@@ -28,6 +45,7 @@ const turnTimerInput     = document.getElementById("turnTimerInput");
 const suddenDeathTimerInput = document.getElementById("suddenDeathTimerInput");
 const suddenDeathToggle  = document.getElementById("suddenDeathToggle");
 const setupSelect        = document.getElementById("setupSelect");
+const preformToggle      = document.getElementById("preformToggle");
 const initValueSelect    = document.getElementById("initValueSelect");
 const rockCellInput      = document.getElementById("rockCellInput");
 const roundsPerRingInput = document.getElementById("roundsPerRingInput");
@@ -143,6 +161,12 @@ const boardOverlay = document.getElementById("boardOverlay");
 const boardOverlayTop = document.querySelector("#boardOverlay .board-overlay-top");
 const boardOverlayLeft = document.querySelector("#boardOverlay .board-overlay-left");
 const boardOverlayGrid = document.querySelector("#boardOverlay .board-overlay-grid");
+const preformMenu = document.getElementById("preformMenu");
+const preformTitle = document.getElementById("preformTitle");
+const preformPreview = document.getElementById("preformPreview");
+const preformPrevBtn = document.getElementById("preformPrevBtn");
+const preformNextBtn = document.getElementById("preformNextBtn");
+const preformRotateBtn = document.getElementById("preformRotateBtn");
 const confirmOverlay = document.getElementById("confirmOverlay");
 const confirmTitle = document.getElementById("confirmTitle");
 const confirmMessage = document.getElementById("confirmMessage");
@@ -344,6 +368,9 @@ function resizeBoardToFitViewport(animate = true){
       }
     }
     updateBoardOverlayLayout();
+    if(preformEnabled && setupPhase){
+      renderPreformOverlay(preformHoverAnchor);
+    }
   };
 
   if(!animate){
@@ -382,6 +409,16 @@ let initialPlacements = [];
 
 let manualSetup = false;
 let setupMode = 'auto';
+let preformEnabled = false;
+let preformState = {
+  selectedIndex: 0,
+  rotation: 0,
+  placed: [],
+  randomPatterns: []
+};
+let preformRegions = [];
+let preformSeedCenters = [];
+let preformHoverAnchor = null;
 let setupPhase  = false;
 let playersWhoHavePlaced = 0;
 let initialTileValue = 1;
@@ -430,6 +467,7 @@ let pendingPowerAction = null; // {type:'wall', anchor:{x,y}}
 let wallEdges = new Set(); // store edges "x1,y1|x2,y2"
 let wallsLayer = null;
 let wallPreviewLayer = null;
+let preformOverlayLayer = null;
 let wallsToRemove = new Set();
 let useQuadrantSeedPreset = false;
 let applyQuadrantSeedThisGame = false;
@@ -904,7 +942,10 @@ function recordDescriptor(stats){
    1) SETUP MENU
 ---------------------------------------------------------------- */
 playerSelect.onchange = () => {
-  const selectedPlayers = parseInt(playerSelect.value, 10);
+  let selectedPlayers = parseInt(playerSelect.value, 10);
+  if(isNaN(selectedPlayers)) selectedPlayers = 2;
+  selectedPlayers = Math.max(2, Math.min(maxSelectablePlayers, selectedPlayers));
+  playerSelect.value = String(selectedPlayers);
   aiPlayerSelect.innerHTML = '';
   for(let i = 0; i <= selectedPlayers; i++){
     const option = document.createElement('option');
@@ -913,6 +954,11 @@ playerSelect.onchange = () => {
     aiPlayerSelect.appendChild(option);
   }
 };
+if(playerSelect){
+  playerSelect.addEventListener('input', () => {
+    playerSelect.dispatchEvent(new Event('change'));
+  });
+}
 window.onload = () => {
   // Esegui la prima volta per forzare l'aggiornamento del numero di AI disponibili
   playerSelect.dispatchEvent(new Event('change'));
@@ -1012,6 +1058,17 @@ function geometricPresetSeeds(width, height, players){
   });
   return seeds;
 }
+function geometric2PresetSeeds(width, height, players){
+  const seeds = [];
+  const positions = (players === 6)
+    ? getGeometricPositionsEdgeSix(width, height)
+    : getGeometricPositions(width, height, players);
+  positions.forEach((pos, idx)=>{
+    if(!pos) return;
+    seeds.push({x: pos.xx, y: pos.yy, pid: idx});
+  });
+  return seeds;
+}
 function buildQuadrantPreviewSeeds(){
   const desiredValues = [4,4,4,3,3,2,2,1];
   const makePattern = ()=>{
@@ -1102,7 +1159,7 @@ if(presetQuadrantSeedBtn){
     renderPresetPreview(10, 10, buildQuadrantPreviewSeeds(), 'Quadrant seed preset');
   };
 }
-[setupSelect, widthSelect, heightSelect, playerSelect].forEach(el => {
+[setupSelect, widthSelect, heightSelect, playerSelect, preformToggle].forEach(el => {
   if(!el) return;
   el.addEventListener('change', () => updateSetupPreview());
 });
@@ -1173,18 +1230,39 @@ function openReportOverlay(){
 function updateSetupPreview(){
   if(!setupPreview || !setupSelect) return;
   const mode = setupSelect.value;
-  if(mode === 'manual'){
-    setupPreview.innerHTML = '';
-    return;
-  }
   const width = Math.max(4, parseInt(widthSelect.value, 10) || 4);
   const height = Math.max(4, parseInt(heightSelect.value, 10) || 4);
-  const players = Math.max(1, parseInt(playerSelect.value, 10) || 2);
-  const seeds = (mode === 'geometric')
+  const players = Math.max(2, Math.min(maxSelectablePlayers, parseInt(playerSelect.value, 10) || 2));
+  const canPreform = width >= 11 && height >= 11 && mode !== 'manual';
+  if(preformToggle){
+    preformToggle.disabled = !canPreform;
+    if(!canPreform) preformToggle.checked = false;
+  }
+  const resolvedMode = setupSelect.value;
+  if(resolvedMode === 'manual'){
+    setupPreview.innerHTML = '';
+    if(preformToggle && preformToggle.checked){
+      preformToggle.checked = false;
+    }
+    return;
+  }
+  const seeds = (resolvedMode === 'geometric')
     ? geometricPresetSeeds(width, height, players)
-    : defaultPresetSeeds(width, height, players);
-  const label = (mode === 'geometric') ? 'Geometric setup' : 'Automatic setup';
+    : (resolvedMode === 'geometric2')
+      ? geometric2PresetSeeds(width, height, players)
+      : defaultPresetSeeds(width, height, players);
+  const label = (resolvedMode === 'geometric')
+    ? 'Geometric setup'
+    : (resolvedMode === 'geometric2')
+      ? 'Geometric 2 setup'
+      : 'Automatic setup';
   renderSetupPreview(width, height, seeds, label);
+  if(preformToggle && preformToggle.checked && !canPreform){
+    const note = document.createElement('div');
+    note.className = 'title';
+    note.textContent = 'Preform requires at least 11x11 and non-manual setup.';
+    setupPreview.appendChild(note);
+  }
 }
 function closeReportOverlay(){
   if(reportOverlay) reportOverlay.classList.add('overlay-hidden');
@@ -1309,6 +1387,176 @@ function updateNewsVisibility(){
   newsBox.setAttribute('aria-hidden', show ? 'false' : 'true');
   if(!show && newsFeed) newsFeed.innerHTML = '';
 }
+function initPreformState(){
+  preformState.selectedIndex = 0;
+  preformState.rotation = 0;
+  preformState.placed = new Array(totalPlayers).fill(false);
+  preformState.randomPatterns = [
+    generateRandomPattern(19, 5),
+    generateRandomPattern(19, 5)
+  ];
+  preformPatterns.forEach((p) => {
+    if(p.name === 'Random A') p.grid = normalizePattern(preformState.randomPatterns[0]);
+    if(p.name === 'Random B') p.grid = normalizePattern(preformState.randomPatterns[1]);
+  });
+}
+function getPatternByIndex(idx){
+  const p = preformPatterns[idx % preformPatterns.length];
+  return {name: p.name, grid: normalizePattern(p.grid)};
+}
+function getRotatedPattern(grid, rotation){
+  let out = normalizePattern(grid);
+  const turns = ((rotation % 4) + 4) % 4;
+  for(let i=0;i<turns;i++){
+    out = rotatePattern(out);
+  }
+  return out;
+}
+function renderPreformPreview(){
+  if(!preformPreview || !preformTitle) return;
+  const {name, grid} = getPatternByIndex(preformState.selectedIndex);
+  const rotated = getRotatedPattern(grid, preformState.rotation);
+  preformTitle.textContent = `${name} • Sum ${sumPattern(rotated)}`;
+  preformPreview.innerHTML = '';
+  for(let y=0;y<rotated.length;y++){
+    for(let x=0;x<rotated[y].length;x++){
+      const cell = document.createElement('div');
+      cell.className = 'preform-cell';
+      const v = rotated[y][x];
+      if(v > 0){
+        cell.classList.add('active');
+        cell.textContent = String(v);
+      }
+      preformPreview.appendChild(cell);
+    }
+  }
+}
+function togglePreformMenu(show){
+  if(!preformMenu) return;
+  preformMenu.setAttribute('aria-hidden', show ? 'false' : 'true');
+  if(show) renderPreformPreview();
+}
+function computePreformRegionsFromCenters(centers){
+  preformRegions = Array.from({length: gridWidthNum}, () => Array(gridHeightNum).fill(-1));
+  const half = 2;
+  centers.forEach((c, idx) => {
+    if(!c) return;
+    for(let dx = -half; dx <= half; dx++){
+      for(let dy = -half; dy <= half; dy++){
+        const gx = c.xx + dx;
+        const gy = c.yy + dy;
+        if(gx < 0 || gy < 0 || gx >= gridWidthNum || gy >= gridHeightNum) continue;
+        const prev = preformRegions[gx][gy];
+        if(prev === -1){
+          preformRegions[gx][gy] = idx;
+        } else if(prev !== idx){
+          preformRegions[gx][gy] = -1;
+        }
+      }
+    }
+  });
+}
+function getSetupSpawnCenters(){
+  if(setupMode === 'geometric'){
+    return getGeometricPositions(gridWidthNum, gridHeightNum, totalPlayers);
+  }
+  if(setupMode === 'geometric2'){
+    return (totalPlayers === 6)
+      ? getGeometricPositionsEdgeSix(gridWidthNum, gridHeightNum)
+      : getGeometricPositions(gridWidthNum, gridHeightNum, totalPlayers);
+  }
+  return getEquidistantPositions(gridWidthNum, gridHeightNum, totalPlayers);
+}
+function canPlacePreformAt(playerIdx, anchorX, anchorY, pattern){
+  const size = pattern.length;
+  const offset = Math.floor(size / 2);
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const v = pattern[y][x];
+      if(v <= 0) continue;
+      const gx = anchorX + (x - offset);
+      const gy = anchorY + (y - offset);
+      if(gx < 0 || gy < 0 || gx >= gridWidthNum || gy >= gridHeightNum) return false;
+      if(preformRegions[gx]?.[gy] !== playerIdx) return false;
+      const tile = grid[gx][gy];
+      if(!tile || tile.isRock || tile.isVoid) return false;
+      if(tile.player !== null || tile.value > 0) return false;
+    }
+  }
+  return true;
+}
+function placePreformAt(playerIdx, anchorX, anchorY, pattern){
+  const size = pattern.length;
+  const offset = Math.floor(size / 2);
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const v = pattern[y][x];
+      if(v <= 0) continue;
+      const gx = anchorX + (x - offset);
+      const gy = anchorY + (y - offset);
+      const tile = grid[gx][gy];
+      if(!tile) continue;
+      const before = snapshotTileState(tile);
+      tile.player = playerIdx;
+      tile.value = v;
+      tile.currentScale = getScaleForValue(v);
+      tile.currentColor = playerColors[playerIdx];
+      tile.shape = 'circle';
+      updateTileGraphics(tile);
+      logTileChange(gx, gy, before, snapshotTileState(tile), 'preform_place');
+      tilesCount[playerIdx]++;
+    }
+  }
+  updateLeaderboard();
+}
+function renderPreformOverlay(anchor){
+  if(!preformOverlayLayer){
+    preformHoverAnchor = anchor ? {x: anchor.x, y: anchor.y} : null;
+    return;
+  }
+  preformOverlayLayer.clear();
+  preformHoverAnchor = anchor ? {x: anchor.x, y: anchor.y} : null;
+  if(!preformEnabled || !setupPhase) return;
+  const playerIdx = turnPlayer;
+  const baseColor = playerColors[playerIdx] ?? 0x666666;
+  const corner = Math.max(3, getTileCornerRadius() - 3);
+  const inset = Math.max(3, Math.round(tileSize * 0.12));
+  preformOverlayLayer.beginFill(baseColor, 0.08);
+  for(let x=0;x<gridWidthNum;x++){
+    for(let y=0;y<gridHeightNum;y++){
+      if(preformRegions[x]?.[y] !== playerIdx) continue;
+      preformOverlayLayer.drawRoundedRect(x * tileSize + 1, y * tileSize + 1, tileSize - 2, tileSize - 2, corner);
+    }
+  }
+  preformOverlayLayer.endFill();
+  if(!preformHoverAnchor) return;
+  const {grid: baseGrid} = getPatternByIndex(preformState.selectedIndex);
+  const pattern = getRotatedPattern(baseGrid, preformState.rotation);
+  const canPlace = canPlacePreformAt(playerIdx, preformHoverAnchor.x, preformHoverAnchor.y, pattern);
+  const ghostColor = canPlace ? baseColor : 0xff4d4d;
+  const ghostAlpha = canPlace ? 0.25 : 0.22;
+  preformOverlayLayer.beginFill(ghostColor, ghostAlpha);
+  const size = pattern.length;
+  const offset = Math.floor(size / 2);
+  const innerCorner = Math.max(2, corner - 2);
+  for(let y=0;y<size;y++){
+    for(let x=0;x<size;x++){
+      const v = pattern[y][x];
+      if(v <= 0) continue;
+      const gx = preformHoverAnchor.x + (x - offset);
+      const gy = preformHoverAnchor.y + (y - offset);
+      if(gx < 0 || gy < 0 || gx >= gridWidthNum || gy >= gridHeightNum) continue;
+      preformOverlayLayer.drawRoundedRect(
+        gx * tileSize + inset,
+        gy * tileSize + inset,
+        tileSize - inset * 2,
+        tileSize - inset * 2,
+        innerCorner
+      );
+    }
+  }
+  preformOverlayLayer.endFill();
+}
 function colToLabel(idx){
   let n = idx + 1;
   let label = '';
@@ -1379,7 +1627,7 @@ function getTileFromOverlayEvent(evt){
   if(x < 0 || y < 0 || x >= gridWidthNum || y >= gridHeightNum) return null;
   return {x, y};
 }
-if(tilesOfWarToggle){
+  if(tilesOfWarToggle){
   tilesOfWarToggle.addEventListener('change', () => {
     updatePowerupOptionsVisibility();
     updatePowerupUI();
@@ -1397,6 +1645,27 @@ if(powerupWallToggle){ powerupWallToggle.addEventListener('change', () => update
 if(powerupSkipToggle){ powerupSkipToggle.addEventListener('change', () => updatePowerupUI()); }
 updatePowerupOptionsVisibility();
 updateNewsVisibility();
+if(preformPrevBtn){
+  preformPrevBtn.onclick = () => {
+    preformState.selectedIndex = (preformState.selectedIndex - 1 + preformPatterns.length) % preformPatterns.length;
+    renderPreformPreview();
+    renderPreformOverlay(preformHoverAnchor);
+  };
+}
+if(preformNextBtn){
+  preformNextBtn.onclick = () => {
+    preformState.selectedIndex = (preformState.selectedIndex + 1) % preformPatterns.length;
+    renderPreformPreview();
+    renderPreformOverlay(preformHoverAnchor);
+  };
+}
+if(preformRotateBtn){
+  preformRotateBtn.onclick = () => {
+    preformState.rotation = (preformState.rotation + 1) % 4;
+    renderPreformPreview();
+    renderPreformOverlay(preformHoverAnchor);
+  };
+}
 if(confirmNoBtn){ confirmNoBtn.onclick = () => closeConfirmOverlay(); }
 
 function openConfirmOverlay(action){
@@ -1494,6 +1763,21 @@ function syncVariablesFromUI(){
   powerupCostMode = (powerupCostModeSelect && powerupCostModeSelect.value) || 'tile';
   powerupPointCost = Math.max(0, parseInt(powerupPointCostInput ? powerupPointCostInput.value : '20', 10) || 0);
   tilesOfWarEnabled = !!(tilesOfWarToggle && tilesOfWarToggle.checked);
+  preformEnabled = !!(preformToggle && preformToggle.checked);
+  if(setupMode === 'manual'){
+    preformEnabled = false;
+    if(preformToggle) preformToggle.checked = false;
+  }
+  if(gridWidthNum < 11 || gridHeightNum < 11){
+    preformEnabled = false;
+    if(preformToggle) preformToggle.checked = false;
+  }
+  const parsedPlayers = parseInt(playerSelect.value, 10);
+  totalPlayers = Math.max(2, Math.min(maxSelectablePlayers, isNaN(parsedPlayers) ? 2 : parsedPlayers));
+  if(playerSelect) playerSelect.value = String(totalPlayers);
+  const parsedAI = parseInt(aiPlayerSelect.value, 10);
+  totalAIPlayers = Math.max(0, Math.min(totalPlayers, isNaN(parsedAI) ? 0 : parsedAI));
+  if(aiPlayerSelect) aiPlayerSelect.value = String(totalAIPlayers);
   powerupEnabled = {
     romboid: !!(powerupRomboidToggle && powerupRomboidToggle.checked),
     viewfinder: !!(powerupViewfinderToggle && powerupViewfinderToggle.checked),
@@ -1518,7 +1802,7 @@ function attachHostSyncListeners(){
     showShrinkCounterToggle, shrinkAnimSelect, shrinkEnabledToggle,
     shrinkCoverageToggle, shrinkCoverageInput, specialTilesToggle,
     specialTilesIntervalInput, specialTilesDurationInput, tilesOfWarToggle,
-    newsToggle,
+    newsToggle, preformToggle,
     powerupRomboidToggle, powerupViewfinderToggle, powerupWallToggle, powerupSkipToggle,
     showDefeatPopupToggle,
     powerupCooldownInput, powerupCooldownModeSelect, scoreTargetInput,
@@ -1561,8 +1845,10 @@ startBtn.onclick = () => {
   updateNewsVisibility();
 
   // Parametri principali
-  totalPlayers       = parseInt(playerSelect.value, 10);
-  totalAIPlayers     = parseInt(aiPlayerSelect.value, 10);
+  totalPlayers       = Math.max(2, Math.min(maxSelectablePlayers, parseInt(playerSelect.value, 10) || 2));
+  if(playerSelect) playerSelect.value = String(totalPlayers);
+  totalAIPlayers     = Math.min(parseInt(aiPlayerSelect.value, 10) || 0, totalPlayers);
+  if(aiPlayerSelect) aiPlayerSelect.value = String(totalAIPlayers);
   if(useQuadrantSeedPreset){
     totalPlayers = 4;
     playerSelect.value = '4';
@@ -1647,6 +1933,7 @@ startBtn.onclick = () => {
   pixiContainer.style.width  = `${w}px`;
   pixiContainer.style.height = `${h}px`;
   app.stage.sortableChildren = true;
+  preformOverlayLayer = new PIXI.Graphics(); preformOverlayLayer.zIndex = 8; app.stage.addChild(preformOverlayLayer);
   wallPreviewLayer = new PIXI.Graphics(); wallPreviewLayer.zIndex = 9; app.stage.addChild(wallPreviewLayer);
   wallsLayer = new PIXI.Graphics(); wallsLayer.zIndex = 10; app.stage.addChild(wallsLayer);
   fxLayer = new PIXI.Container(); fxLayer.zIndex = 11; app.stage.addChild(fxLayer);
@@ -1710,7 +1997,7 @@ function startNewGame(){
   grid = [];
   tilesCount = new Array(totalPlayers).fill(0);
   turnPlayer = 0;
-  setupPhase = manualSetup;
+  setupPhase = manualSetup || preformEnabled;
   playersWhoHavePlaced = 0;
   turnInProgress = false;
   animationsInProgress = 0;
@@ -1740,6 +2027,17 @@ function startNewGame(){
   if(wallsLayer){ wallsLayer.clear(); }
   if(wallPreviewLayer){ wallPreviewLayer.clear(); }
   clearWallPreview();
+  if(preformEnabled){
+    initPreformState();
+    preformSeedCenters = getSetupSpawnCenters();
+    computePreformRegionsFromCenters(preformSeedCenters);
+    togglePreformMenu(true);
+    preformHoverAnchor = null;
+  } else {
+    togglePreformMenu(false);
+    preformSeedCenters = [];
+    preformRegions = [];
+  }
 
   // Crea la griglia in base a gridWidthNum e gridHeightNum
   for(let x = 0; x < gridWidthNum; x++){
@@ -1802,12 +2100,16 @@ function startNewGame(){
     }
   }
 
-  // Se "Automatic", piazza qualche casella iniziale
-  if(!manualSetup){
+  // Se "Automatic" / "Geometric", piazza qualche casella iniziale
+  if(!manualSetup && !preformEnabled){
     setupPhase = false;
     const spawn = (setupMode === 'geometric')
       ? getGeometricPositions(gridWidthNum, gridHeightNum, totalPlayers)
-      : getEquidistantPositions(gridWidthNum, gridHeightNum, totalPlayers);
+      : (setupMode === 'geometric2')
+        ? ((totalPlayers === 6)
+          ? getGeometricPositionsEdgeSix(gridWidthNum, gridHeightNum)
+          : getGeometricPositions(gridWidthNum, gridHeightNum, totalPlayers))
+        : getEquidistantPositions(gridWidthNum, gridHeightNum, totalPlayers);
     spawn.forEach((pos, iP) => {
       if(!pos) return;
       initTile(pos.xx, pos.yy, iP, initialTileValue);
@@ -1818,6 +2120,7 @@ function startNewGame(){
 
   updateBackgroundForCurrentPlayer();
   updateLeaderboard();
+  renderPreformOverlay(null);
   postNews("Welcome to Tiles Wars. Secure the center; borders will shrink every 10 rounds.", 0x444444);
   if(netMode === 'multi' && isHost){
     broadcastState();
@@ -1875,6 +2178,11 @@ function isMoveValid(x, y){
   
   // Durante il setup manuale: solo celle vuote
   if(setupPhase){
+    if(preformEnabled){
+      const {grid: baseGrid} = getPatternByIndex(preformState.selectedIndex);
+      const pattern = getRotatedPattern(baseGrid, preformState.rotation);
+      return canPlacePreformAt(turnPlayer, x, y, pattern);
+    }
     if(tile.value !== 0) return false;
     for(let i = 0; i < totalPlayers; i++){
       if(i === turnPlayer) continue;
@@ -1952,6 +2260,21 @@ function runLocalClick(x, y){
   resetTurnWatchdog();
   currentMoveCapture = { player: turnPlayer, origin: {x, y}, tiles: new Set() };
   logEvent('move_click', {player: turnPlayer, x, y, activePowerup, pendingPowerAction: pendingPowerAction ? pendingPowerAction.type : null});
+  if(setupPhase && preformEnabled){
+    const {name, grid: baseGrid} = getPatternByIndex(preformState.selectedIndex);
+    const pattern = getRotatedPattern(baseGrid, preformState.rotation);
+    if(!canPlacePreformAt(turnPlayer, x, y, pattern)) return;
+    placePreformAt(turnPlayer, x, y, pattern);
+    preformState.placed[turnPlayer] = true;
+    const allPlaced = preformState.placed.every(Boolean);
+    if(allPlaced){
+      setupPhase = false;
+      togglePreformMenu(false);
+      renderPreformOverlay(null);
+    }
+    endTurn();
+    return;
+  }
   // Powerup pending second action
   if(pendingPowerAction){
     const target = grid[x][y];
@@ -2295,11 +2618,11 @@ function endTurn(isRemoteOverride){
     updateBackgroundForCurrentPlayer();
     updateLeaderboard();
     turnInProgress = false;
-    updatePowerupUI();
-    
-    // Advance token and clear lock BEFORE broadcasting, 
-    // so peers receive the token for the NEW state.
-    networkTurnToken++;
+  updatePowerupUI();
+  
+  // Advance token and clear lock BEFORE broadcasting, 
+  // so peers receive the token for the NEW state.
+  networkTurnToken++;
     clickLock = false;
     currentTurnSessionId++; 
 
@@ -2308,10 +2631,17 @@ function endTurn(isRemoteOverride){
     awaitingSync = false;
   }
 
+  if(preformEnabled && setupPhase){
+    togglePreformMenu(true);
+    renderPreformOverlay(preformHoverAnchor);
+  } else if(preformEnabled){
+    renderPreformOverlay(null);
+  }
+
   startTurnTimer();
-    if(isAIPlayer[turnPlayer]){
-      scheduleAIMove(turnPlayer, 1000);
-    }
+  if(isAIPlayer[turnPlayer]){
+    scheduleAIMove(turnPlayer, 1000);
+  }
     
     // Check if we have actions waiting for this new turn
   processPendingActions();
@@ -2572,6 +2902,13 @@ function getScaleForValue(v){
 function getTileCornerRadius(){
   return Math.max(6, Math.round(tileSize * 0.18));
 }
+function getPlayerStrokeColor(playerIdx){
+  if(typeof playerIdx !== 'number') return null;
+  return possibleStrokeColors[playerIdx] || null;
+}
+function getPlayerStrokeWidth(){
+  return Math.max(2, Math.round(tileSize * 0.08));
+}
 
 /**
  * Disegna/ridisegna una tile in base allo stato (player, valore, rock, ecc.)
@@ -2610,6 +2947,12 @@ function updateTileGraphics(tile){
 
   tile.circle.clear();
   if(tile.player !== null && tile.value > 0){
+    const stroke = getPlayerStrokeColor(tile.player);
+    if(stroke){
+      tile.circle.lineStyle(getPlayerStrokeWidth(), stroke, 1);
+    } else {
+      tile.circle.lineStyle(0);
+    }
     tile.circle.beginFill(tile.currentColor);
     if(tile.shape === 'romboid'){
       const s = tileSize/2 * tile.currentScale;
@@ -3573,11 +3916,18 @@ function clearWallPreview(){
       }
     }
   }
+  if(preformEnabled && setupPhase){
+    renderPreformOverlay(preformHoverAnchor);
+  }
 }
 function handleTileOut(){
   if(pendingPowerAction && pendingPowerAction.type==='wall' && pendingPowerAction.anchor){
     if(wallPreviewLayer){ wallPreviewLayer.clear(); }
     // keep highlight/dim state
+    return;
+  }
+  if(preformEnabled && setupPhase){
+    renderPreformOverlay(null);
     return;
   }
   clearWallPreview();
@@ -3627,10 +3977,15 @@ function showWallPreview(anchor, hover){
   }
 }
 function handleTileHover(x,y){
-  if(!pendingPowerAction || pendingPowerAction.type!=='wall') return;
-  const anchor = pendingPowerAction.anchor;
-  if(!anchor) return;
-  showWallPreview(anchor, {x,y});
+  if(pendingPowerAction && pendingPowerAction.type==='wall'){
+    const anchor = pendingPowerAction.anchor;
+    if(!anchor) return;
+    showWallPreview(anchor, {x,y});
+    return;
+  }
+  if(preformEnabled && setupPhase){
+    renderPreformOverlay({x,y});
+  }
 }
 function redrawWalls(){
   if(!wallsLayer) return;
@@ -4241,7 +4596,7 @@ if(incAiBtn){
   incAiBtn.onclick = () => {
     if(netMode !== 'multi') return;
     if(!isHost){ alert("Only the host can add AI players."); return; }
-    if(peers.length + multiAiCount >= 6) return;
+    if(peers.length + multiAiCount >= maxSelectablePlayers) return;
     multiAiCount++;
     setNetUI();
     broadcastState();
@@ -4325,6 +4680,7 @@ function buildSnapshot(){
     config: {
       turnTimerSeconds, suddenDeathTimerSeconds, suddenDeathEnabled,
       manualSetup, setupMode, initialTileValue, roundsPerRing,
+      preformEnabled,
       shrinkCoverageGateEnabled, shrinkCoveragePercent, showShrinkCounter,
       shrinkAnimMode, specialTilesEnabled, specialTilesInterval,
       scoreTarget, powerupCostMode, powerupPointCost, tilesOfWarEnabled,
@@ -4383,6 +4739,10 @@ function applySnapshot(snap){
     setupMode = c.setupMode || (c.manualSetup ? 'manual' : 'auto');
     manualSetup = setupMode === 'manual';
     initialTileValue = c.initialTileValue;
+    preformEnabled = !!c.preformEnabled;
+    if(manualSetup || gridWidthNum < 11 || gridHeightNum < 11){
+      preformEnabled = false;
+    }
     roundsPerRing = c.roundsPerRing;
     shrinkCoverageGateEnabled = c.shrinkCoverageGateEnabled;
     shrinkCoveragePercent = c.shrinkCoveragePercent;
@@ -4410,7 +4770,20 @@ function applySnapshot(snap){
     if(suddenDeathTimerInput) suddenDeathTimerInput.value = String(suddenDeathTimerSeconds);
     if(suddenDeathToggle) suddenDeathToggle.checked = suddenDeathEnabled;
     if(setupSelect) setupSelect.value = setupMode;
+    if(preformToggle) preformToggle.checked = preformEnabled;
     updateSetupPreview();
+    if(preformEnabled){
+      initPreformState();
+      preformSeedCenters = getSetupSpawnCenters();
+      computePreformRegionsFromCenters(preformSeedCenters);
+      togglePreformMenu(true);
+      preformHoverAnchor = null;
+    } else {
+      togglePreformMenu(false);
+      preformSeedCenters = [];
+      preformRegions = [];
+      preformHoverAnchor = null;
+    }
     if(initValueSelect) initValueSelect.value = String(initialTileValue);
     if(roundsPerRingInput) roundsPerRingInput.value = String(roundsPerRing);
     if(shrinkCoverageToggle) shrinkCoverageToggle.checked = shrinkCoverageGateEnabled;
@@ -4459,6 +4832,7 @@ function applySnapshot(snap){
     pixiContainer.style.width = `${w}px`;
     pixiContainer.style.height = `${h}px`;
     app.stage.sortableChildren = true;
+    preformOverlayLayer = new PIXI.Graphics(); preformOverlayLayer.zIndex = 8; app.stage.addChild(preformOverlayLayer);
     wallPreviewLayer = new PIXI.Graphics(); wallPreviewLayer.zIndex = 9; app.stage.addChild(wallPreviewLayer);
     wallsLayer = new PIXI.Graphics(); wallsLayer.zIndex = 10; app.stage.addChild(wallsLayer);
     fxLayer = new PIXI.Container(); fxLayer.zIndex = 11; app.stage.addChild(fxLayer);
@@ -4530,6 +4904,7 @@ function applySnapshot(snap){
   turnInProgress = false;
   updateBackgroundForCurrentPlayer();
   updateLeaderboard();
+  renderPreformOverlay(null);
   updatePowerupUI();
 
   // Always update visuals and timers since we don't receive our own messages
@@ -4596,6 +4971,159 @@ function getGeometricPositions(W, H, p){
   }
   return positions;
 }
+function getGeometricPositionsEdgeSix(W, H){
+  const positions = [];
+  const used = new Set();
+  const cx = (W - 1) / 2;
+  const cy = (H - 1) / 2;
+  const xLeft = 1;
+  const xRight = Math.max(1, W - 2);
+  const yTop = 1;
+  const yBottom = Math.max(1, H - 2);
+  const upperY = Math.max(1, Math.round((cy + yTop) / 2));
+  const lowerY = Math.min(H - 2, Math.round((cy + yBottom) / 2));
+  const targets = [
+    {x: Math.round(cx), y: yTop},
+    {x: xRight, y: upperY},
+    {x: xRight, y: lowerY},
+    {x: Math.round(cx), y: yBottom},
+    {x: xLeft, y: lowerY},
+    {x: xLeft, y: upperY}
+  ];
+  const findNearestFree = (startX, startY) => {
+    if(startX >= 0 && startX < W && startY >= 0 && startY < H && !used.has(keyXY(startX, startY))){
+      return {x: startX, y: startY};
+    }
+    for(let r = 1; r <= Math.max(W, H); r++){
+      for(let dx = -r; dx <= r; dx++){
+        const dy = r - Math.abs(dx);
+        const candidates = [
+          {x: startX + dx, y: startY + dy},
+          {x: startX + dx, y: startY - dy}
+        ];
+        for(const c of candidates){
+          if(c.x < 0 || c.y < 0 || c.x >= W || c.y >= H) continue;
+          const key = keyXY(c.x, c.y);
+          if(!used.has(key)) return c;
+        }
+      }
+    }
+    return {x: Math.max(0, Math.min(W - 1, startX)), y: Math.max(0, Math.min(H - 1, startY))};
+  };
+  targets.forEach(t => {
+    const placed = findNearestFree(t.x, t.y);
+    used.add(keyXY(placed.x, placed.y));
+    positions.push({xx: placed.x, yy: placed.y});
+  });
+  return positions;
+}
+
+function normalizePattern(grid){
+  const out = [];
+  for(let y=0;y<grid.length;y++){
+    out[y] = [];
+    for(let x=0;x<grid[y].length;x++){
+      out[y][x] = grid[y][x];
+    }
+  }
+  return out;
+}
+
+function rotatePattern(grid){
+  const size = grid.length;
+  const out = [];
+  for(let y=0;y<size;y++){
+    out[y] = [];
+    for(let x=0;x<size;x++){
+      out[y][x] = grid[size - 1 - x][y];
+    }
+  }
+  return out;
+}
+
+function sumPattern(grid){
+  let sum = 0;
+  for(let y=0;y<grid.length;y++){
+    for(let x=0;x<grid[y].length;x++){
+      sum += grid[y][x];
+    }
+  }
+  return sum;
+}
+
+function generateRandomPattern(targetSum = 19, size = 5){
+  const grid = Array.from({length: size}, () => Array.from({length: size}, () => 0));
+  let sum = 0;
+  const center = Math.floor(size / 2);
+  grid[center][center] = 1;
+  sum = 1;
+  const neighbors = (x,y) => [
+    {x:x+1,y},{x:x-1,y},{x,y:y+1},{x,y:y-1}
+  ].filter(p=>p.x>=0&&p.y>=0&&p.x<size&&p.y<size);
+  while(sum < targetSum){
+    let cx = Math.floor(Math.random() * size);
+    let cy = Math.floor(Math.random() * size);
+    if(Math.random() < 0.7){
+      const pool = [];
+      for(let y=0;y<size;y++){
+        for(let x=0;x<size;x++){
+          if(grid[y][x] > 0) pool.push({x,y});
+        }
+      }
+      if(pool.length){
+        const pick = pool[Math.floor(Math.random()*pool.length)];
+        const nbs = neighbors(pick.x, pick.y);
+        const next = nbs[Math.floor(Math.random()*nbs.length)];
+        cx = next.x; cy = next.y;
+      }
+    }
+    if(grid[cy][cx] < 3){
+      grid[cy][cx]++;
+      sum++;
+    }
+  }
+  return grid;
+}
+
+const preformPatterns = [
+  { name: 'Square', grid: [
+    [1,1,1,1,1],
+    [1,0,0,0,1],
+    [1,0,3,0,1],
+    [1,0,0,0,1],
+    [1,1,1,1,1]
+  ]},
+  { name: 'Arrow', grid: [
+    [0,0,1,0,0],
+    [0,1,3,1,0],
+    [1,2,3,2,1],
+    [0,0,2,0,0],
+    [0,0,2,0,0]
+  ]},
+  { name: 'Phalanx', grid: [
+    [0,0,1,0,0],
+    [0,1,2,1,0],
+    [1,2,3,2,1],
+    [0,1,2,1,0],
+    [0,0,1,0,0]
+  ]},
+  { name: 'Testudo', grid: [
+    [0,1,1,1,0],
+    [1,2,1,2,0],
+    [1,0,1,0,1],
+    [1,2,0,2,0],
+    [0,0,1,0,1]
+  ]},
+  { name: 'Spearhead', grid: [
+    [0,0,2,0,0],
+    [0,1,3,1,0],
+    [1,2,3,2,1],
+    [0,1,1,1,0],
+    [0,0,0,0,0]
+  ]},
+  { name: 'Random A', grid: null },
+  { name: 'Random B', grid: null }
+];
 function handleIncomingAction(action){
   logicalRoundWorkDone = false;
   // if(!isHost) return;
