@@ -43,32 +43,12 @@
         <div class="form-group group-grid">
           <div class="group-title">Grid</div>
           <div class="form-row">
-            <label for="widthSelect">Grid Width (4..12)</label>
-            <select id="widthSelect">
-              <option value="4" selected>4</option>
-              <option value="5">5</option>
-              <option value="6">6</option>
-              <option value="7">7</option>
-              <option value="8">8</option>
-              <option value="9">9</option>
-              <option value="10">10</option>
-              <option value="11">11</option>
-              <option value="12">12</option>
-            </select>
+            <label for="widthSelect">Grid Width</label>
+            <input type="number" id="widthSelect" min="4" max="50" value="4">
           </div>
           <div class="form-row">
-            <label for="heightSelect">Grid Height (4..12)</label>
-            <select id="heightSelect">
-              <option value="4" selected>4</option>
-              <option value="5">5</option>
-              <option value="6">6</option>
-              <option value="7">7</option>
-              <option value="8">8</option>
-              <option value="9">9</option>
-              <option value="10">10</option>
-              <option value="11">11</option>
-              <option value="12">12</option>
-            </select>
+            <label for="heightSelect">Grid Height</label>
+            <input type="number" id="heightSelect" min="4" max="50" value="4">
           </div>
           <div class="form-row">
             <label for="rockCellInput">Number of Rock Cells</label>
@@ -99,8 +79,10 @@
             <select id="setupSelect">
               <option value="auto" selected>Automatic</option>
               <option value="manual">Manual</option>
+              <option value="geometric">Geometric</option>
             </select>
           </div>
+          <div id="setupPreview" class="preset-preview" aria-live="polite"></div>
           <div class="form-row">
             <label for="initValueSelect">Initial Tile Value</label>
             <select id="initValueSelect">
@@ -138,6 +120,10 @@
             <label class="checkbox-row">
               <input type="checkbox" id="powerupWallToggle" checked>
               Enable Wall
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="powerupSkipToggle" checked>
+              Enable Skip Turn
             </label>
           </div>
           <div class="form-row">
@@ -255,6 +241,7 @@
       <button class="powerup-btn" id="powerupRomboid" disabled>⬦ Romboid</button>
       <button class="powerup-btn" id="powerupViewfinder" disabled>🎯 Viewfinder</button>
       <button class="powerup-btn" id="powerupWall" disabled>🧱 Wall</button>
+      <button class="powerup-btn" id="powerupSkip" disabled>⏭ Skip</button>
       <div class="powerup-cooldown" id="powerupCooldownHint"></div>
     </div>
     <!-- ================== TIMER DISPLAY ================== -->
@@ -285,6 +272,7 @@
   <div id="endgameOverlay">
     <h1 id="winnerText">Player X Wins!</h1>
     <button id="restartButton">Restart Game</button>
+    <button id="downloadLogsBtn" type="button">Download Logs</button>
   </div>
 
   <!-- ================== DEFEAT OVERLAY ================== -->
@@ -305,8 +293,26 @@
         <button id="resumeBtn" class="primary">Resume</button>
         <button id="pauseRestartBtn">Restart</button>
         <button id="pauseExitBtn">Exit</button>
+        <button id="replayLastMoveBtn" type="button">Replay last move</button>
+        <button id="reportTileBtn" type="button">Report broken tile</button>
+        <button id="exportLogBtn" type="button">Export debug log</button>
       </div>
     </div>
+  </div>
+  <div id="reportOverlay" class="overlay-hidden">
+    <div class="report-card">
+      <h2>Report broken tile</h2>
+      <p>Click the tile that is stuck. The board will show coordinates.</p>
+      <div id="reportReadout">Hover a tile to see coordinates.</div>
+      <div class="report-actions">
+        <button id="reportCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div id="boardOverlay" aria-hidden="true">
+    <div class="board-overlay-top"></div>
+    <div class="board-overlay-left"></div>
+    <div class="board-overlay-grid"></div>
   </div>
   <!-- ================== CONFIRM OVERLAY ================== -->
   <div id="confirmOverlay" class="overlay-hidden">

@@ -48,6 +48,7 @@ const scoreTargetInput = document.getElementById("scoreTargetInput");
 const powerupCostModeSelect = document.getElementById("powerupCostMode");
 const powerupPointCostInput = document.getElementById("powerupPointCost");
 const presetPreview = document.getElementById("presetPreview");
+const setupPreview = document.getElementById("setupPreview");
 const presetChaos2PBtn = document.getElementById("presetChaos2PBtn");
 const netModeToggle = document.getElementById("netModeToggle");
 const createRoomBtn = document.getElementById("createRoomBtn");
@@ -72,12 +73,15 @@ const powerupOptionsWrap = document.getElementById("powerupOptions");
 const powerupRomboidToggle = document.getElementById("powerupRomboidToggle");
 const powerupViewfinderToggle = document.getElementById("powerupViewfinderToggle");
 const powerupWallToggle = document.getElementById("powerupWallToggle");
+const powerupSkipToggle = document.getElementById("powerupSkipToggle");
+const powerupSkipBtn = document.getElementById("powerupSkip");
 
 // Riferimenti all'endgame overlay
 const endgameOverlay     = document.getElementById("endgameOverlay");
 const winnerText         = document.getElementById("winnerText");
 const restartButton      = document.getElementById("restartButton");
 const restartGameButton  = document.getElementById("restartGameButton");
+const downloadLogsBtn = document.getElementById("downloadLogsBtn");
 
 // Defeat overlay references
 const defeatOverlay = document.getElementById("defeatOverlay");
@@ -129,6 +133,16 @@ const pauseOverlay = document.getElementById("pauseOverlay");
 const resumeBtn = document.getElementById("resumeBtn");
 const pauseRestartBtn = document.getElementById("pauseRestartBtn");
 const pauseExitBtn = document.getElementById("pauseExitBtn");
+const replayLastMoveBtn = document.getElementById("replayLastMoveBtn");
+const reportTileBtn = document.getElementById("reportTileBtn");
+const exportLogBtn = document.getElementById("exportLogBtn");
+const reportOverlay = document.getElementById("reportOverlay");
+const reportReadout = document.getElementById("reportReadout");
+const reportCancelBtn = document.getElementById("reportCancelBtn");
+const boardOverlay = document.getElementById("boardOverlay");
+const boardOverlayTop = document.querySelector("#boardOverlay .board-overlay-top");
+const boardOverlayLeft = document.querySelector("#boardOverlay .board-overlay-left");
+const boardOverlayGrid = document.querySelector("#boardOverlay .board-overlay-grid");
 const confirmOverlay = document.getElementById("confirmOverlay");
 const confirmTitle = document.getElementById("confirmTitle");
 const confirmMessage = document.getElementById("confirmMessage");
@@ -137,6 +151,102 @@ const confirmNoBtn = document.getElementById("confirmNoBtn");
 
 // Helper for generating unique grid keys
 function keyXY(x, y) { return `${x},${y}`; }
+
+function logEvent(type, data = {}){
+  debugLog.push({
+    ts: new Date().toISOString(),
+    type,
+    data
+  });
+  if(debugLog.length > debugLogMax){
+    debugLog.splice(0, debugLog.length - debugLogMax);
+  }
+}
+
+function resetDebugLog(){
+  debugLog.length = 0;
+}
+
+function snapshotTileState(tile){
+  if(!tile) return null;
+  return {
+    player: tile.player,
+    value: tile.value,
+    isRock: tile.isRock,
+    isVoid: tile.isVoid,
+    isExploding: tile.isExploding,
+    shape: tile.shape
+  };
+}
+
+function logTileChange(x, y, before, after, reason){
+  if(!before || !after) return;
+  const changed = (
+    before.player !== after.player ||
+    before.value !== after.value ||
+    before.isRock !== after.isRock ||
+    before.isVoid !== after.isVoid ||
+    before.isExploding !== after.isExploding ||
+    before.shape !== after.shape
+  );
+  if(!changed) return;
+  if(currentMoveCapture){
+    currentMoveCapture.tiles.add(`${x},${y}`);
+  }
+  logEvent('tile_change', {
+    coord: `${colToLabel(x)}${y + 1}`,
+    x,
+    y,
+    reason,
+    before,
+    after,
+    turnPlayer,
+    roundsCompleted,
+    shrinkRoundsCompleted,
+    turnsTaken,
+    ringsApplied
+  });
+}
+
+function replayLastMove(){
+  if(!lastMoveReplay || !grid || !app) return;
+  const origin = lastMoveReplay.origin;
+  const tiles = lastMoveReplay.tiles || [];
+  const overlay = new PIXI.Container();
+  overlay.zIndex = 50;
+  const accent = 0x000000;
+  const playerColor = playerColors[lastMoveReplay.player] ?? 0x111111;
+
+  const drawMarker = (x, y, color, thickness, alpha) => {
+    const g = new PIXI.Graphics();
+    g.lineStyle(thickness, color, alpha);
+    g.drawRoundedRect(1, 1, tileSize - 2, tileSize - 2, getTileCornerRadius());
+    g.x = x * tileSize;
+    g.y = y * tileSize;
+    overlay.addChild(g);
+    return g;
+  };
+
+  tiles.forEach(({x, y}) => {
+    drawMarker(x, y, accent, 2, 0.7);
+  });
+  const originMarker = drawMarker(origin.x, origin.y, playerColor, 3, 0.95);
+  originMarker.filters = [new PIXI.filters.BlurFilter(3)];
+
+  if(fxLayer) fxLayer.addChild(overlay);
+  else app.stage.addChild(overlay);
+
+  gsap.fromTo(overlay, {alpha: 0}, {
+    alpha: 1,
+    duration: 0.2,
+    yoyo: true,
+    repeat: 3,
+    onComplete: () => {
+      if(fxLayer) fxLayer.removeChild(overlay);
+      else app.stage.removeChild(overlay);
+    }
+  });
+}
 
 // Variabile globale per il toggle “Mostra numeri”
 let showNumbers = false;
@@ -207,6 +317,56 @@ function computeTileSizeForViewport(){
   return Math.max(24, Math.min(72, size));
 }
 
+function resizeBoardToFitViewport(animate = true){
+  if(!app || !pixiContainer) return;
+  const targetTileSize = computeTileSizeForViewport();
+  if(!Number.isFinite(targetTileSize) || targetTileSize <= 0) return;
+  const w = gridWidthNum * targetTileSize;
+  const h = gridHeightNum * targetTileSize;
+
+  const applyResize = (newSize) => {
+    tileSize = newSize;
+    app.renderer.resize(gridWidthNum * tileSize, gridHeightNum * tileSize);
+    pixiContainer.style.width = `${gridWidthNum * tileSize}px`;
+    pixiContainer.style.height = `${gridHeightNum * tileSize}px`;
+    for(let x=0;x<gridWidthNum;x++){
+      for(let y=0;y<gridHeightNum;y++){
+        const tile = grid[x][y];
+        if(!tile) continue;
+        tile.x = x * tileSize;
+        tile.y = y * tileSize;
+        tile.circle.x = tileSize / 2;
+        tile.circle.y = tileSize / 2;
+        tile.text.x = tileSize / 2;
+        tile.text.y = tileSize / 2;
+        tile.text.style.fontSize = tileSize / 2;
+        updateTileGraphics(tile);
+      }
+    }
+    updateBoardOverlayLayout();
+  };
+
+  if(!animate){
+    applyResize(targetTileSize);
+    return;
+  }
+
+  const startSize = tileSize;
+  const delta = targetTileSize - startSize;
+  if(Math.abs(delta) < 0.5){
+    applyResize(targetTileSize);
+    return;
+  }
+  const tweenObj = {v: startSize};
+  gsap.to(tweenObj, {
+    duration: 0.6,
+    ease: "power2.out",
+    v: targetTileSize,
+    onUpdate: () => applyResize(tweenObj.v),
+    onComplete: () => applyResize(targetTileSize)
+  });
+}
+
 let grid = [];
 
 let totalPlayers = 2;
@@ -221,6 +381,7 @@ let tilesCount = [];
 let initialPlacements = [];
 
 let manualSetup = false;
+let setupMode = 'auto';
 let setupPhase  = false;
 let playersWhoHavePlaced = 0;
 let initialTileValue = 1;
@@ -256,13 +417,15 @@ let shrinkCoveragePercent = 75;
 let shrinkGateReached = false;
 let shrinkCoverageTargetCount = 0;
 let tilesOfWarEnabled = false;
-let powerupEnabled = { romboid: true, viewfinder: true, wall: true };
+let powerupEnabled = { romboid: true, viewfinder: true, wall: true, skip: true };
 let showDefeatPopup = !!(showDefeatPopupToggle && showDefeatPopupToggle.checked);
 let newsEnabled = !!(newsToggle && newsToggle.checked);
+const debugLog = [];
+const debugLogMax = 800;
 let powerupCooldownTurns = 2;
 let powerupCooldownMode = 'block'; // block or perPower
 let powerupCooldowns = [];
-let activePowerup = null; // 'romboid'|'viewfinder'|'wall'
+let activePowerup = null; // 'romboid'|'viewfinder'|'wall'|'skip'
 let pendingPowerAction = null; // {type:'wall', anchor:{x,y}}
 let wallEdges = new Set(); // store edges "x1,y1|x2,y2"
 let wallsLayer = null;
@@ -270,6 +433,8 @@ let wallPreviewLayer = null;
 let wallsToRemove = new Set();
 let useQuadrantSeedPreset = false;
 let applyQuadrantSeedThisGame = false;
+let currentMoveCapture = null;
+let lastMoveReplay = null;
 
 /* Rounds & shrinking rings */
 let turnsTaken = 0;          // total individual turns completed
@@ -279,6 +444,7 @@ let shrinkRoundsCompleted = 0; // rounds counted since shrink gate reached
 let ringsApplied = 0;        // how many rings already applied
 let shrinkAnimMode = 'fall';
 let shrinkEnabled = true;
+let skipTurns = [];
 let playerBonusPoints = [];
 let totalTurnsCounter = 0;
 let specialTilesEnabled = false;
@@ -431,7 +597,7 @@ function setPowerupCooldown(playerIdx){
   ensureCooldownEntry(playerIdx);
   if(powerupCooldownMode === 'perPower'){
     // Default to blocking all if no power specified
-    ['romboid','viewfinder','wall'].forEach(p=>{
+    ['romboid','viewfinder','wall','skip'].forEach(p=>{
       powerupCooldowns[playerIdx][p] = powerupCooldownTurns;
     });
   } else {
@@ -449,9 +615,9 @@ function setPowerupCooldownFor(playerIdx, power){
 function ensureCooldownEntry(playerIdx){
   if(powerupCooldownMode === 'perPower'){
     if(!powerupCooldowns[playerIdx] || typeof powerupCooldowns[playerIdx] !== 'object'){
-      powerupCooldowns[playerIdx] = {romboid:0, viewfinder:0, wall:0};
+      powerupCooldowns[playerIdx] = {romboid:0, viewfinder:0, wall:0, skip:0};
     } else {
-      ['romboid','viewfinder','wall'].forEach(p=>{
+      ['romboid','viewfinder','wall','skip'].forEach(p=>{
         if(typeof powerupCooldowns[playerIdx][p] !== 'number') powerupCooldowns[playerIdx][p]=0;
       });
     }
@@ -469,7 +635,7 @@ function getPowerCooldown(playerIdx, power){
 function decrementCooldown(playerIdx){
   ensureCooldownEntry(playerIdx);
   if(powerupCooldownMode === 'perPower'){
-    ['romboid','viewfinder','wall'].forEach(p=>{
+    ['romboid','viewfinder','wall','skip'].forEach(p=>{
       powerupCooldowns[playerIdx][p] = Math.max(0, (powerupCooldowns[playerIdx][p]||0)-1);
     });
   } else {
@@ -495,9 +661,11 @@ function updatePowerupUI(){
   if(activePowerup && (!baseReady || !powerupEnabled[activePowerup] || getPowerCooldown(turnPlayer, activePowerup) > 0)){
     activePowerup = null;
   }
-  [powerupRomboidBtn,powerupViewfinderBtn,powerupWallBtn].forEach(btn=>{
+  [powerupRomboidBtn,powerupViewfinderBtn,powerupWallBtn,powerupSkipBtn].forEach(btn=>{
     if(!btn) return;
-    const id = btn.id === 'powerupRomboid' ? 'romboid' : (btn.id==='powerupViewfinder' ? 'viewfinder' : 'wall');
+    const id = btn.id === 'powerupRomboid'
+      ? 'romboid'
+      : (btn.id==='powerupViewfinder' ? 'viewfinder' : (btn.id==='powerupWall' ? 'wall' : 'skip'));
     if(!powerupEnabled[id]){
       btn.style.display = 'none';
       return;
@@ -510,15 +678,18 @@ function updatePowerupUI(){
   if(activePowerup==='romboid' && powerupRomboidBtn) powerupRomboidBtn.classList.add('active');
   if(activePowerup==='viewfinder' && powerupViewfinderBtn) powerupViewfinderBtn.classList.add('active');
   if(activePowerup==='wall' && powerupWallBtn) powerupWallBtn.classList.add('active');
+  if(activePowerup==='skip' && powerupSkipBtn) powerupSkipBtn.classList.add('active');
   if(powerupCooldownHint){
     const cdR = getPowerCooldown(turnPlayer,'romboid');
     const cdV = getPowerCooldown(turnPlayer,'viewfinder');
     const cdW = getPowerCooldown(turnPlayer,'wall');
+    const cdS = getPowerCooldown(turnPlayer,'skip');
     if(powerupCooldownMode === 'perPower'){
       const parts = [];
       if(cdR>0) parts.push(`R:${cdR}`);
       if(cdV>0) parts.push(`V:${cdV}`);
       if(cdW>0) parts.push(`W:${cdW}`);
+      if(cdS>0) parts.push(`S:${cdS}`);
       powerupCooldownHint.textContent = parts.length ? `Cooldowns ${parts.join(' ')}` : '';
     } else {
       const cd = powerupCooldowns[turnPlayer]||0;
@@ -794,9 +965,48 @@ function renderPresetPreview(width, height, seeds, label){
   presetPreview.appendChild(title);
   presetPreview.appendChild(gridEl);
 }
+function renderSetupPreview(width, height, seeds, label){
+  if(!setupPreview) return;
+  setupPreview.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'title';
+  title.textContent = `${label} (${width}x${height})`;
+  const gridEl = document.createElement('div');
+  gridEl.className = 'preset-preview-grid';
+  gridEl.style.gridTemplateColumns = `repeat(${width}, 8px)`;
+  gridEl.style.gridTemplateRows = `repeat(${height}, 8px)`;
+  const seedMap = new Map();
+  (seeds||[]).forEach(s=>{
+    seedMap.set(`${s.x},${s.y}`, s);
+  });
+  for(let y=0;y<height;y++){
+    for(let x=0;x<width;x++){
+      const cell = document.createElement('div');
+      cell.className = 'preset-preview-cell';
+      const key = `${x},${y}`;
+      if(seedMap.has(key)){
+        cell.classList.add('seed');
+        const pid = seedMap.get(key).pid || 0;
+        const col = possibleColors[pid % possibleColors.length];
+        cell.style.backgroundColor = `#${col.toString(16).padStart(6,'0')}`;
+      }
+      gridEl.appendChild(cell);
+    }
+  }
+  setupPreview.appendChild(title);
+  setupPreview.appendChild(gridEl);
+}
 function defaultPresetSeeds(width, height, players){
   const seeds = [];
   getEquidistantPositions(width, height, players).forEach((pos, idx)=>{
+    if(!pos) return;
+    seeds.push({x: pos.xx, y: pos.yy, pid: idx});
+  });
+  return seeds;
+}
+function geometricPresetSeeds(width, height, players){
+  const seeds = [];
+  getGeometricPositions(width, height, players).forEach((pos, idx)=>{
     if(!pos) return;
     seeds.push({x: pos.xx, y: pos.yy, pid: idx});
   });
@@ -892,6 +1102,11 @@ if(presetQuadrantSeedBtn){
     renderPresetPreview(10, 10, buildQuadrantPreviewSeeds(), 'Quadrant seed preset');
   };
 }
+[setupSelect, widthSelect, heightSelect, playerSelect].forEach(el => {
+  if(!el) return;
+  el.addEventListener('change', () => updateSetupPreview());
+});
+updateSetupPreview();
 if(netModeToggle){
   netModeToggle.onclick = ()=>{
     netMode = (netMode === 'multi' ? 'local' : 'multi');
@@ -945,10 +1160,135 @@ function togglePowerSelection(power){
 if(powerupRomboidBtn){ powerupRomboidBtn.onclick = ()=> togglePowerSelection('romboid'); }
 if(powerupViewfinderBtn){ powerupViewfinderBtn.onclick = ()=> togglePowerSelection('viewfinder'); }
 if(powerupWallBtn){ powerupWallBtn.onclick = ()=> togglePowerSelection('wall'); }
+if(powerupSkipBtn){ powerupSkipBtn.onclick = ()=> togglePowerSelection('skip'); }
 if(pauseGameButton){ pauseGameButton.onclick = () => pauseGame(); }
+function openReportOverlay(){
+  if(!reportOverlay || !boardOverlay) return;
+  if(pauseOverlay) pauseOverlay.classList.add('overlay-hidden');
+  reportOverlay.classList.remove('overlay-hidden');
+  if(reportReadout) reportReadout.textContent = "Hover a tile to see coordinates.";
+  setBoardOverlayActive(true);
+}
+
+function updateSetupPreview(){
+  if(!setupPreview || !setupSelect) return;
+  const mode = setupSelect.value;
+  if(mode === 'manual'){
+    setupPreview.innerHTML = '';
+    return;
+  }
+  const width = Math.max(4, parseInt(widthSelect.value, 10) || 4);
+  const height = Math.max(4, parseInt(heightSelect.value, 10) || 4);
+  const players = Math.max(1, parseInt(playerSelect.value, 10) || 2);
+  const seeds = (mode === 'geometric')
+    ? geometricPresetSeeds(width, height, players)
+    : defaultPresetSeeds(width, height, players);
+  const label = (mode === 'geometric') ? 'Geometric setup' : 'Automatic setup';
+  renderSetupPreview(width, height, seeds, label);
+}
+function closeReportOverlay(){
+  if(reportOverlay) reportOverlay.classList.add('overlay-hidden');
+  setBoardOverlayActive(false);
+  if(pauseOverlay) pauseOverlay.classList.remove('overlay-hidden');
+  resizeBoardToFitViewport(true);
+}
+function captureGridSnapshot(){
+  const snapshot = [];
+  for(let x=0;x<gridWidthNum;x++){
+    snapshot[x] = [];
+    for(let y=0;y<gridHeightNum;y++){
+      const t = grid[x][y];
+      snapshot[x][y] = t ? {
+        player: t.player,
+        value: t.value,
+        isRock: t.isRock,
+        isVoid: t.isVoid,
+        isExploding: t.isExploding,
+        shape: t.shape
+      } : null;
+    }
+  }
+  return snapshot;
+}
+function reportBrokenTile(x, y){
+  const tile = grid[x]?.[y];
+  logEvent('report_broken_tile', {
+    coord: `${colToLabel(x)}${y + 1}`,
+    x, y,
+    tile: tile ? {
+      player: tile.player,
+      value: tile.value,
+      isRock: tile.isRock,
+      isVoid: tile.isVoid,
+      isExploding: tile.isExploding,
+      shape: tile.shape
+    } : null,
+    turnPlayer,
+    roundsCompleted,
+    shrinkRoundsCompleted,
+    turnsTaken,
+    ringsApplied,
+    shrinkGateReached,
+    shrinkEnabled,
+    shrinkAnimMode,
+    gridWidthNum,
+    gridHeightNum,
+    tileSize,
+    gridSnapshot: captureGridSnapshot()
+  });
+}
+function exportDebugLog(){
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    meta: {
+      gridWidthNum,
+      gridHeightNum,
+      tileSize,
+      roundsCompleted,
+      shrinkRoundsCompleted,
+      turnsTaken,
+      ringsApplied,
+      shrinkGateReached,
+      shrinkEnabled,
+      shrinkAnimMode
+    },
+    events: debugLog
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `tileswars-debug-log-${Date.now()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 if(resumeBtn){ resumeBtn.onclick = () => resumeGame(); }
 if(pauseRestartBtn){ pauseRestartBtn.onclick = () => openConfirmOverlay('restart'); }
 if(pauseExitBtn){ pauseExitBtn.onclick = () => openConfirmOverlay('exit'); }
+if(replayLastMoveBtn){ replayLastMoveBtn.onclick = () => replayLastMove(); }
+if(reportTileBtn){ reportTileBtn.onclick = () => openReportOverlay(); }
+if(exportLogBtn){ exportLogBtn.onclick = () => exportDebugLog(); }
+if(reportCancelBtn){ reportCancelBtn.onclick = () => closeReportOverlay(); }
+if(downloadLogsBtn){ downloadLogsBtn.onclick = () => exportDebugLog(); }
+if(boardOverlay){
+  boardOverlay.addEventListener('pointermove', (evt) => {
+    const coord = getTileFromOverlayEvent(evt);
+    if(!coord || !reportReadout){
+      if(reportReadout) reportReadout.textContent = "Hover a tile to see coordinates.";
+      return;
+    }
+    reportReadout.textContent = `Selected: ${colToLabel(coord.x)}${coord.y + 1}`;
+  });
+  boardOverlay.addEventListener('pointerdown', (evt) => {
+    const coord = getTileFromOverlayEvent(evt);
+    if(!coord) return;
+    reportBrokenTile(coord.x, coord.y);
+    if(reportReadout) reportReadout.textContent = `Saved: ${colToLabel(coord.x)}${coord.y + 1}`;
+    closeReportOverlay();
+  });
+}
 if(confirmYesBtn){
   confirmYesBtn.onclick = () => {
     if(pendingConfirmAction === 'restart' || pendingConfirmAction === 'exit'){
@@ -969,6 +1309,76 @@ function updateNewsVisibility(){
   newsBox.setAttribute('aria-hidden', show ? 'false' : 'true');
   if(!show && newsFeed) newsFeed.innerHTML = '';
 }
+function colToLabel(idx){
+  let n = idx + 1;
+  let label = '';
+  while(n > 0){
+    const rem = (n - 1) % 26;
+    label = String.fromCharCode(65 + rem) + label;
+    n = Math.floor((n - 1) / 26);
+  }
+  return label;
+}
+function buildBoardOverlayLabels(){
+  if(!boardOverlayTop || !boardOverlayLeft) return;
+  boardOverlayTop.innerHTML = '';
+  boardOverlayLeft.innerHTML = '';
+  const labelSize = 18;
+  boardOverlayTop.style.height = `${labelSize}px`;
+  boardOverlayTop.style.top = `${-labelSize}px`;
+  boardOverlayLeft.style.width = `${labelSize}px`;
+  boardOverlayLeft.style.left = `${-labelSize}px`;
+  for(let x = 0; x < gridWidthNum; x++){
+    const span = document.createElement('span');
+    span.style.width = `${tileSize}px`;
+    span.style.height = `${labelSize}px`;
+    span.textContent = colToLabel(x);
+    boardOverlayTop.appendChild(span);
+  }
+  for(let y = 0; y < gridHeightNum; y++){
+    const span = document.createElement('span');
+    span.style.height = `${tileSize}px`;
+    span.style.width = `${labelSize}px`;
+    span.textContent = String(y + 1);
+    boardOverlayLeft.appendChild(span);
+  }
+}
+function updateBoardOverlayLayout(){
+  if(!boardOverlay || !pixiContainer || !gameDiv) return;
+  const boardRect = pixiContainer.getBoundingClientRect();
+  const gameRect = gameDiv.getBoundingClientRect();
+  boardOverlay.style.left = `${boardRect.left - gameRect.left}px`;
+  boardOverlay.style.top = `${boardRect.top - gameRect.top}px`;
+  boardOverlay.style.width = `${boardRect.width}px`;
+  boardOverlay.style.height = `${boardRect.height}px`;
+  if(boardOverlayGrid){
+    boardOverlayGrid.style.backgroundSize = `${tileSize}px ${tileSize}px`;
+  }
+  buildBoardOverlayLabels();
+}
+function setBoardOverlayActive(active){
+  if(!boardOverlay) return;
+  if(active){
+    resizeBoardToFitViewport(false);
+    updateBoardOverlayLayout();
+    boardOverlay.classList.add('active');
+    boardOverlay.setAttribute('aria-hidden', 'false');
+  } else {
+    boardOverlay.classList.remove('active');
+    boardOverlay.setAttribute('aria-hidden', 'true');
+  }
+}
+function getTileFromOverlayEvent(evt){
+  if(!boardOverlay) return null;
+  const rect = boardOverlay.getBoundingClientRect();
+  const relX = evt.clientX - rect.left;
+  const relY = evt.clientY - rect.top;
+  if(relX < 0 || relY < 0) return null;
+  const x = Math.floor(relX / tileSize);
+  const y = Math.floor(relY / tileSize);
+  if(x < 0 || y < 0 || x >= gridWidthNum || y >= gridHeightNum) return null;
+  return {x, y};
+}
 if(tilesOfWarToggle){
   tilesOfWarToggle.addEventListener('change', () => {
     updatePowerupOptionsVisibility();
@@ -984,6 +1394,7 @@ if(newsToggle){
 if(powerupRomboidToggle){ powerupRomboidToggle.addEventListener('change', () => updatePowerupUI()); }
 if(powerupViewfinderToggle){ powerupViewfinderToggle.addEventListener('change', () => updatePowerupUI()); }
 if(powerupWallToggle){ powerupWallToggle.addEventListener('change', () => updatePowerupUI()); }
+if(powerupSkipToggle){ powerupSkipToggle.addEventListener('change', () => updatePowerupUI()); }
 updatePowerupOptionsVisibility();
 updateNewsVisibility();
 if(confirmNoBtn){ confirmNoBtn.onclick = () => closeConfirmOverlay(); }
@@ -1067,7 +1478,8 @@ function syncVariablesFromUI(){
   turnTimerSeconds   = parseInt(turnTimerInput.value, 10);
   suddenDeathTimerSeconds = parseInt(suddenDeathTimerInput.value, 10);
   suddenDeathEnabled = suddenDeathToggle.checked;
-  manualSetup        = (setupSelect.value === "manual");
+  setupMode          = setupSelect.value;
+  manualSetup        = (setupMode === "manual");
   initialTileValue   = parseInt(initValueSelect.value, 10);
   const rprRaw = parseInt(roundsPerRingInput ? roundsPerRingInput.value : '10', 10);
   roundsPerRing = isNaN(rprRaw) ? 10 : Math.max(1, Math.min(50, rprRaw));
@@ -1085,9 +1497,10 @@ function syncVariablesFromUI(){
   powerupEnabled = {
     romboid: !!(powerupRomboidToggle && powerupRomboidToggle.checked),
     viewfinder: !!(powerupViewfinderToggle && powerupViewfinderToggle.checked),
-    wall: !!(powerupWallToggle && powerupWallToggle.checked)
+    wall: !!(powerupWallToggle && powerupWallToggle.checked),
+    skip: !!(powerupSkipToggle && powerupSkipToggle.checked)
   };
-  if(!powerupEnabled.romboid && !powerupEnabled.viewfinder && !powerupEnabled.wall){
+  if(!powerupEnabled.romboid && !powerupEnabled.viewfinder && !powerupEnabled.wall && !powerupEnabled.skip){
     activePowerup = null;
     pendingPowerAction = null;
     clearWallPreview();
@@ -1106,7 +1519,7 @@ function attachHostSyncListeners(){
     shrinkCoverageToggle, shrinkCoverageInput, specialTilesToggle,
     specialTilesIntervalInput, specialTilesDurationInput, tilesOfWarToggle,
     newsToggle,
-    powerupRomboidToggle, powerupViewfinderToggle, powerupWallToggle,
+    powerupRomboidToggle, powerupViewfinderToggle, powerupWallToggle, powerupSkipToggle,
     showDefeatPopupToggle,
     powerupCooldownInput, powerupCooldownModeSelect, scoreTargetInput,
     powerupCostModeSelect, powerupPointCostInput
@@ -1142,6 +1555,7 @@ startBtn.onclick = () => {
   if(gameDiv) gameDiv.classList.remove('paused');
   if(pauseOverlay) pauseOverlay.classList.add('overlay-hidden');
   if(confirmOverlay) confirmOverlay.classList.add('overlay-hidden');
+  resetDebugLog();
   syncVariablesFromUI();
   updatePowerupOptionsVisibility();
   updateNewsVisibility();
@@ -1316,8 +1730,9 @@ function startNewGame(){
   playerEliminated = new Array(totalPlayers).fill(false);
   pendingElimination = new Array(totalPlayers).fill(false);
   powerupCooldowns = new Array(totalPlayers);
-  for(let i=0;i<totalPlayers;i++){ powerupCooldowns[i] = (powerupCooldownMode==='perPower') ? {romboid:0,viewfinder:0,wall:0} : 0; }
+  for(let i=0;i<totalPlayers;i++){ powerupCooldowns[i] = (powerupCooldownMode==='perPower') ? {romboid:0,viewfinder:0,wall:0,skip:0} : 0; }
   playerPointsCurrent = new Array(totalPlayers).fill(0);
+  skipTurns = new Array(totalPlayers).fill(0);
   activePowerup = null;
   pendingPowerAction = null;
   wallEdges = new Set();
@@ -1390,7 +1805,9 @@ function startNewGame(){
   // Se "Automatic", piazza qualche casella iniziale
   if(!manualSetup){
     setupPhase = false;
-    const spawn = getEquidistantPositions(gridWidthNum, gridHeightNum, totalPlayers);
+    const spawn = (setupMode === 'geometric')
+      ? getGeometricPositions(gridWidthNum, gridHeightNum, totalPlayers)
+      : getEquidistantPositions(gridWidthNum, gridHeightNum, totalPlayers);
     spawn.forEach((pos, iP) => {
       if(!pos) return;
       initTile(pos.xx, pos.yy, iP, initialTileValue);
@@ -1430,11 +1847,13 @@ function initTile(x, y, player, val){
   }
   if(tile.isRock) return;
 
+  const before = snapshotTileState(tile);
   tile.player = player;
   tile.value = val;
   tile.currentScale = getScaleForValue(val);
   tile.currentColor = playerColors[player];
   updateTileGraphics(tile);
+  logTileChange(x, y, before, snapshotTileState(tile), 'init_tile');
 
   tilesCount[player]++;
   console.log(`Player ${player + 1} placed a tile at (${x}, ${y}). Total tiles: ${tilesCount[player]}`);
@@ -1470,6 +1889,9 @@ function isMoveValid(x, y){
   // Se c'è un'azione di powerup pendente (secondo step)
   if(pendingPowerAction){
     if(pendingPowerAction.type === 'viewfinder'){
+       return (tile.player !== null && tile.player !== turnPlayer);
+    }
+    if(pendingPowerAction.type === 'skip'){
        return (tile.player !== null && tile.player !== turnPlayer);
     }
     if(pendingPowerAction.type === 'wall'){
@@ -1528,22 +1950,36 @@ function handleTileClick(x, y){
 function runLocalClick(x, y){
   logicalRoundWorkDone = false;
   resetTurnWatchdog();
+  currentMoveCapture = { player: turnPlayer, origin: {x, y}, tiles: new Set() };
+  logEvent('move_click', {player: turnPlayer, x, y, activePowerup, pendingPowerAction: pendingPowerAction ? pendingPowerAction.type : null});
   // Powerup pending second action
   if(pendingPowerAction){
     const target = grid[x][y];
     if(pendingPowerAction.type === 'viewfinder'){
       if(!target || target.player === null || target.player === turnPlayer) return;
+      logEvent('powerup_target', {power: 'viewfinder', player: turnPlayer, x, y});
       turnInProgress = true;
-      target.value++;
-      target.currentScale = getScaleForValue(target.value);
-      updateTileGraphics(target);
-      if(target.value >= 4){
+      const before = snapshotTileState(target);
+      if(target.value >= 3){
         explodeTile(target, x, y, target.player, true);
       } else {
+        target.value++;
+        target.currentScale = getScaleForValue(target.value);
+        updateTileGraphics(target);
+        logTileChange(x, y, before, snapshotTileState(target), 'powerup_viewfinder');
         animateCircleGrowth(target);
       }
       setPowerupCooldownFor(turnPlayer, 'viewfinder');
       pendingPowerAction = null;
+      return;
+    }
+    if(pendingPowerAction.type === 'skip'){
+      if(!target || target.player === null || target.player === turnPlayer) return;
+      const targetPlayer = target.player;
+      skipTurns[targetPlayer] = (skipTurns[targetPlayer] || 0) + 1;
+      logEvent('powerup_target', {power: 'skip', player: turnPlayer, target: targetPlayer, x, y});
+      pendingPowerAction = null;
+      endTurn();
       return;
     }
     if(pendingPowerAction.type === 'wall'){
@@ -1551,6 +1987,7 @@ function runLocalClick(x, y){
       if(!anchor){
         if(!target || target.isRock) return;
         pendingPowerAction.anchor = {x,y};
+        logEvent('powerup_anchor', {power: 'wall', player: turnPlayer, x, y});
         showWallPreview(pendingPowerAction.anchor, null);
         return;
       }
@@ -1563,9 +2000,11 @@ function runLocalClick(x, y){
       const dy = Math.abs(y - anchor.y);
       if(dx + dy !== 1){
         pendingPowerAction.anchor = {x,y};
+        logEvent('powerup_anchor', {power: 'wall', player: turnPlayer, x, y});
         showWallPreview(pendingPowerAction.anchor, null);
         return;
       }
+      logEvent('powerup_target', {power: 'wall', player: turnPlayer, x, y, anchor});
       addWallBetween(anchor.x, anchor.y, x, y);
       setPowerupCooldownFor(turnPlayer, 'wall');
       pendingPowerAction = null;
@@ -1579,6 +2018,7 @@ function runLocalClick(x, y){
   if(activePowerup){
     const tile = grid[x][y];
     if(!tile || tile.player !== turnPlayer || tile.value < 3) return;
+    logEvent('powerup_activate', {power: activePowerup, player: turnPlayer, x, y});
     const canPayPoints = (powerupCostMode === 'points' || powerupCostMode === 'either') && (playerPointsCurrent[turnPlayer]||0) >= powerupPointCost;
     const canPayTile = (powerupCostMode === 'tile' || powerupCostMode === 'either');
     turnInProgress = true;
@@ -1589,12 +2029,14 @@ function runLocalClick(x, y){
       } else if(!canPayTile){
         turnInProgress=false; activePowerup=null; updatePowerupUI(); return;
       }
+      const before = snapshotTileState(tile);
       tile.value = 1;
       tile.shape = 'romboid';
       tile.player = turnPlayer;
       tile.currentScale = getScaleForValue(1);
       tile.currentColor = playerColors[turnPlayer];
       updateTileGraphics(tile);
+      logTileChange(x, y, before, snapshotTileState(tile), 'powerup_romboid');
       setPowerupCooldownFor(turnPlayer, 'romboid');
       activePowerup = null;
       animateCircleGrowth(tile);
@@ -1604,13 +2046,33 @@ function runLocalClick(x, y){
       if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(canPayTile){
+        const before = snapshotTileState(tile);
         tile.value = 0;
         tile.player = null;
         tilesCount[turnPlayer] = Math.max(0, tilesCount[turnPlayer]-1);
         updateTileGraphics(tile);
+        logTileChange(x, y, before, snapshotTileState(tile), 'powerup_viewfinder_sacrifice');
       } else { turnInProgress=false; activePowerup=null; updatePowerupUI(); return; }
       pendingPowerAction = {type:'viewfinder', source:{x,y}};
       setPowerupCooldownFor(turnPlayer, 'viewfinder');
+      activePowerup = null;
+      updatePowerupUI();
+      turnInProgress = false;
+      return;
+    }
+    if(activePowerup === 'skip'){
+      if(canPayPoints){
+        playerPointsCurrent[turnPlayer] -= powerupPointCost;
+      } else if(canPayTile){
+        const before = snapshotTileState(tile);
+        tile.value = 0;
+        tile.player = null;
+        tilesCount[turnPlayer] = Math.max(0, tilesCount[turnPlayer]-1);
+        updateTileGraphics(tile);
+        logTileChange(x, y, before, snapshotTileState(tile), 'powerup_skip_sacrifice');
+      } else { turnInProgress=false; activePowerup=null; updatePowerupUI(); return; }
+      pendingPowerAction = {type:'skip', source:{x,y}};
+      setPowerupCooldownFor(turnPlayer, 'skip');
       activePowerup = null;
       updatePowerupUI();
       turnInProgress = false;
@@ -1620,10 +2082,12 @@ function runLocalClick(x, y){
       if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(canPayTile){
+        const before = snapshotTileState(tile);
         tile.value = 0;
         tile.player = null;
         tilesCount[turnPlayer] = Math.max(0, tilesCount[turnPlayer]-1);
         updateTileGraphics(tile);
+        logTileChange(x, y, before, snapshotTileState(tile), 'powerup_wall_sacrifice');
       } else { turnInProgress=false; activePowerup=null; updatePowerupUI(); return; }
       pendingPowerAction = {type:'wall', anchor:null};
       activePowerup = null;
@@ -1669,14 +2133,15 @@ function runLocalClick(x, y){
   turnInProgress = true;
   beginTurnStats(turnPlayer, x, y);
 
-  tile.value++;
-  updateTileGraphics(tile);
-  console.log(`Player ${turnPlayer + 1} incremented tile (${x}, ${y}) to ${tile.value}.`);
-  updateLeaderboard();
-
-  if(tile.value >= 4){
+  const before = snapshotTileState(tile);
+  if(tile.value >= 3){
     explodeTile(tile, x, y, turnPlayer);
   } else {
+    tile.value++;
+    updateTileGraphics(tile);
+    logTileChange(x, y, before, snapshotTileState(tile), 'click_increment');
+    console.log(`Player ${turnPlayer + 1} incremented tile (${x}, ${y}) to ${tile.value}.`);
+    updateLeaderboard();
     animateCircleGrowth(tile);
   }
 }
@@ -1805,6 +2270,24 @@ function endTurn(isRemoteOverride){
       return; 
     }
 
+    logEvent('end_turn', {
+      turnPlayer,
+      turnsTaken,
+      roundsCompleted,
+      shrinkRoundsCompleted,
+      ringsApplied
+    });
+    if(currentMoveCapture){
+      lastMoveReplay = {
+        player: currentMoveCapture.player,
+        origin: currentMoveCapture.origin,
+        tiles: Array.from(currentMoveCapture.tiles).map(key => {
+          const [xStr, yStr] = key.split(',');
+          return {x: parseInt(xStr, 10), y: parseInt(yStr, 10)};
+        })
+      };
+      currentMoveCapture = null;
+    }
     // Passa la mano
     nextPlayer();
     
@@ -1820,18 +2303,18 @@ function endTurn(isRemoteOverride){
     clickLock = false;
     currentTurnSessionId++; 
 
-    if(netMode === 'multi' && wasMyTurn){
-      broadcastState();
-      awaitingSync = false;
-    }
+  if(netMode === 'multi' && wasMyTurn){
+    broadcastState();
+    awaitingSync = false;
+  }
 
-    startTurnTimer();
+  startTurnTimer();
     if(isAIPlayer[turnPlayer]){
       scheduleAIMove(turnPlayer, 1000);
     }
     
     // Check if we have actions waiting for this new turn
-    processPendingActions();
+  processPendingActions();
   } finally {
     isExecutingEndTurn = false;
   }
@@ -1845,14 +2328,22 @@ function nextPlayer(){
 
   let attempts = 0;
   const oldPlayer = turnPlayer;
-  do {
+  while(true){
     turnPlayer = (turnPlayer + 1) % totalPlayers;
     attempts++;
     if(attempts > totalPlayers) break;
-    if(tilesCount[turnPlayer] === 0){
-        console.log(`nextPlayer: skipping player ${turnPlayer+1} (tilesCount: 0)`);
+    if(skipTurns[turnPlayer] > 0){
+      skipTurns[turnPlayer]--;
+      logEvent('skip_turn', {player: turnPlayer});
+      continue;
     }
-  } while(tilesCount[turnPlayer] === 0 && !allButOneRemain());
+    if(tilesCount[turnPlayer] === 0){
+      console.log(`nextPlayer: skipping player ${turnPlayer+1} (tilesCount: 0)`);
+      if(allButOneRemain()) break;
+      continue;
+    }
+    break;
+  }
 
   console.log(`nextPlayer: turn passed from ${oldPlayer+1} to ${turnPlayer+1}`);
 
@@ -1871,6 +2362,8 @@ function explodeTile(tile, x, y, player, isSuddenDeath = false){
     return;
   }
   const isRomboid = (tile.shape === 'romboid');
+  const before = snapshotTileState(tile);
+  logEvent('explode_start', {x, y, player, isRomboid, value: tile.value});
   tile.isExploding = true;
   tile.value = 0;
   tile.player = null;
@@ -1878,6 +2371,7 @@ function explodeTile(tile, x, y, player, isSuddenDeath = false){
   tile.currentColor = 0xffffff;
   tile.shape = 'circle';
   updateTileGraphics(tile);
+  logTileChange(x, y, before, snapshotTileState(tile), 'explode_origin');
 
   tilesCount[player]--;
   if(currentTurnStats){ currentTurnStats.explosions++; }
@@ -1929,7 +2423,7 @@ function animateExplosion(tile, x, y, player, isRomboid=false){
       return;
     }
     const neighbor = grid[nx][ny];
-    if(neighbor.isRock){
+    if(neighbor.isRock || neighbor.isVoid){
       fragmentsCompleted++;
       if(fragmentsCompleted === total) resetExplodedTile(tile);
       return;
@@ -1967,6 +2461,8 @@ function animateExplosion(tile, x, y, player, isRomboid=false){
     const oldPlayer = neighbor.player;
     const oldScale = neighbor.currentScale;
     const oldColor = neighbor.currentColor;
+    const beforeNeighbor = snapshotTileState(neighbor);
+    const triggerExplosion = neighbor.value >= 3;
 
     if(neighbor.value === 0){
       neighbor.player = player;
@@ -1986,8 +2482,13 @@ function animateExplosion(tile, x, y, player, isRomboid=false){
         neighbor.player = player;
         neighbor.currentColor = playerColors[player];
       }
-      neighbor.value++;
+      if(!triggerExplosion){
+        neighbor.value++;
+      } else {
+        neighbor.value = 3;
+      }
     }
+    logTileChange(nx, ny, beforeNeighbor, snapshotTileState(neighbor), 'explode_neighbor');
 
     const fragment = new PIXI.Graphics();
     fragment.beginFill(playerColors[player]);
@@ -2011,10 +2512,10 @@ function animateExplosion(tile, x, y, player, isRomboid=false){
         updateTileGraphics(neighbor);
         updateLeaderboard();
 
-        if(neighbor.value >= 4){
-           explodeTile(neighbor, nx, ny, player);
+        if(triggerExplosion){
+          explodeTile(neighbor, nx, ny, player);
         } else {
-           animateGrowthAfterColor(neighbor, oldScale, neighbor.currentColor, player);
+          animateGrowthAfterColor(neighbor, oldScale, neighbor.currentColor, player);
         }
 
         fragmentsCompleted++;
@@ -2264,11 +2765,13 @@ function suddenDeathTick(){
 
       if(tile.player !== null && tile.value > 0){
         // Se è già a 3, esplode
-        if(tile.value === 3){
+        if(tile.value >= 3){
           explodeTile(tile, x, y, tile.player, true);
         } else {
+          const before = snapshotTileState(tile);
           tile.value++;
           animateCircleGrowth(tile);
+          logTileChange(x, y, before, snapshotTileState(tile), 'sudden_death_increment');
         }
       }
     }
@@ -2328,7 +2831,7 @@ function handleRoundProgression(isRemote = false){
         if(shrinkGateReached && gateWasReached){
           shrinkRoundsCompleted++;
         }
-        if(shrinkGateReached && roundsPerRing > 0 && shrinkRoundsCompleted > 0 && shrinkRoundsCompleted % roundsPerRing === 0){
+  if(shrinkGateReached && roundsPerRing > 0 && shrinkRoundsCompleted > 0 && shrinkRoundsCompleted % roundsPerRing === 0){
           console.log(`Shrink decided: Gate rounds ${shrinkRoundsCompleted} matches setting ${roundsPerRing}.`);
           
           if(isRemote){
@@ -2336,6 +2839,7 @@ function handleRoundProgression(isRemote = false){
             return true; 
           }
           
+          logEvent('shrink_start', {ring: ringsApplied, mode: shrinkAnimMode, roundsCompleted, shrinkRoundsCompleted});
           postNews(`Borders shrink inward. Outer ring turns to rock.`, 0x222222);
           const started = (shrinkAnimMode === 'walls') ? animateShrinkingRingWalls(ringsApplied, false) : (shrinkAnimMode === 'falloff' ? animateShrinkingEdgeFallOff(ringsApplied, false) : animateShrinkingRingCascade(ringsApplied, false));
           if(started) {
@@ -2408,6 +2912,7 @@ function applyShrinkingRing(ringIndex){
 function convertToRock(x, y){
   const tile = grid[x][y];
   if(!tile || tile.isRock) return false;
+  const before = snapshotTileState(tile);
   removeWallsTouching(x,y);
   // Aggiorna conteggi se la cella era di un giocatore
   if(tile.player !== null && typeof tile.player === 'number' && tile.value > 0){
@@ -2419,7 +2924,9 @@ function convertToRock(x, y){
   tile.value = 0;
   tile.currentScale = 0;
   tile.currentColor = 0x000000;
+  logEvent('convert_to_rock', {x, y});
   updateTileGraphics(tile);
+  logTileChange(x, y, before, snapshotTileState(tile), 'convert_to_rock');
   return true;
 }
 function removeWallsTouching(x,y){
@@ -2470,6 +2977,10 @@ function animateShrinkingRingCascade(ringIndex, isRemote = false){
   let i = 0;
   const dropNext = () => {
     if(i >= cells.length){
+      if(!boardOverlay || !boardOverlay.classList.contains('active')){
+        resizeBoardToFitViewport(true);
+      }
+      logEvent('shrink_end', {ring: ringIndex, mode: 'fall', roundsCompleted, shrinkRoundsCompleted});
       ringsApplied++;
       updateLeaderboard();
       updateBackgroundForCurrentPlayer();
@@ -2582,11 +3093,17 @@ function animateShrinkingEdgeFallOff(ringIndex, isRemote = false){
     startTileAnimation(tile);
     gsap.to(tile, { duration: 0.35, delay, ease: "power2.in", y: tile.y + H + tileSize*2, rotation: rot, alpha: 0, onComplete: () => {
       app.stage.removeChild(tile);
+      const before = snapshotTileState(tile);
       tile.isVoid = true; tile.eventMode = 'none'; tile.visible = false;
       tile.player = null; tile.value = 0; tile.currentScale = 0; tile.currentColor = 0xffffff; tile.isRock = false;
+      logTileChange(x, y, before, snapshotTileState(tile), 'shrink_falloff_void');
       finishAnimation(sessionId);
       completed++;
       if(completed === total){
+        if(!boardOverlay || !boardOverlay.classList.contains('active')){
+          resizeBoardToFitViewport(true);
+        }
+        logEvent('shrink_end', {ring: ringIndex, mode: 'falloff', roundsCompleted, shrinkRoundsCompleted});
         ringsApplied++;
         updateLeaderboard(); updateBackgroundForCurrentPlayer(); finalizePendingEliminations();
         ringAnimationInProgress = false;
@@ -2631,6 +3148,10 @@ function animateShrinkingRingWalls(ringIndex, isRemote = false){
     subtleShake(); playThudSfx();
     gsap.timeline({onComplete:()=>{
       [leftBar,rightBar,topBar,bottomBar].forEach(b=> app.stage.removeChild(b));
+      if(!boardOverlay || !boardOverlay.classList.contains('active')){
+        resizeBoardToFitViewport(true);
+      }
+      logEvent('shrink_end', {ring: ringIndex, mode: 'walls', roundsCompleted, shrinkRoundsCompleted});
       ringsApplied++;
       updateLeaderboard(); updateBackgroundForCurrentPlayer();
       ringAnimationInProgress = false;
@@ -3530,6 +4051,7 @@ function performAIMove(playerIndex){
   } else {
     chosenTilePos = ownedTiles[Math.floor(Math.random() * ownedTiles.length)];
   }
+  logEvent('ai_move', {player: playerIndex, x: chosenTilePos.x, y: chosenTilePos.y});
 
   if(netMode === 'multi' && isHost) {
     const action = {
@@ -3546,15 +4068,17 @@ function performAIMove(playerIndex){
       const tile = grid[chosenTilePos.x][chosenTilePos.y];
       beginTurnStats(playerIndex, chosenTilePos.x, chosenTilePos.y);
       logicalRoundWorkDone = false;
-      tile.value++;
-      updateTileGraphics(tile);
-      if(tile.value === 1 && tile.player === playerIndex){
-        tilesCount[playerIndex]++;
-      }
-      updateLeaderboard();
-      if(tile.value >= 4){
+      const before = snapshotTileState(tile);
+      if(tile.value >= 3){
         explodeTile(tile, chosenTilePos.x, chosenTilePos.y, playerIndex);
       } else {
+        tile.value++;
+        updateTileGraphics(tile);
+        logTileChange(chosenTilePos.x, chosenTilePos.y, before, snapshotTileState(tile), 'ai_increment');
+        if(tile.value === 1 && tile.player === playerIndex){
+          tilesCount[playerIndex]++;
+        }
+        updateLeaderboard();
         animateCircleGrowth(tile);
       }
     });
@@ -3562,15 +4086,17 @@ function performAIMove(playerIndex){
     // Single player or Local mode
     const tile = grid[chosenTilePos.x][chosenTilePos.y];
     beginTurnStats(playerIndex, chosenTilePos.x, chosenTilePos.y);
-    tile.value++;
-    updateTileGraphics(tile);
-    if(tile.value === 1 && tile.player === playerIndex){
-      tilesCount[playerIndex]++;
-    }
-    updateLeaderboard();
-    if(tile.value >= 4){
+    const before = snapshotTileState(tile);
+    if(tile.value >= 3){
       explodeTile(tile, chosenTilePos.x, chosenTilePos.y, playerIndex);
     } else {
+      tile.value++;
+      updateTileGraphics(tile);
+      logTileChange(chosenTilePos.x, chosenTilePos.y, before, snapshotTileState(tile), 'ai_increment');
+      if(tile.value === 1 && tile.player === playerIndex){
+        tilesCount[playerIndex]++;
+      }
+      updateLeaderboard();
       animateCircleGrowth(tile);
     }
   }
@@ -3636,6 +4162,11 @@ document.addEventListener('keydown', (e) => {
     startBtn.click();
   }
 });
+window.addEventListener('resize', () => {
+  if(boardOverlay && boardOverlay.classList.contains('active')){
+    updateBoardOverlayLayout();
+  }
+});
 
 function restartGame(){
   if(netMode === 'multi' && isHost && ws && ws.readyState === WebSocket.OPEN) {
@@ -3647,6 +4178,7 @@ function restartGame(){
   if(suddenDeathIntervalId) clearInterval(suddenDeathIntervalId);
   if(turnWatchdog) clearTimeout(turnWatchdog);
   if(aiMoveTimeoutId) clearTimeout(aiMoveTimeoutId);
+  resetDebugLog();
   aiMoveTimeoutId = null;
   pendingAIMovePlayer = null;
   isPaused = false;
@@ -3782,6 +4314,7 @@ function buildSnapshot(){
     gridWidthNum, gridHeightNum,
     turnPlayer, tilesCount, playerPointsCurrent, playerBonusPoints,
     roundsCompleted, shrinkRoundsCompleted, turnsTaken, ringsApplied,
+    skipTurns,
     shrinkGateReached, shrinkEnabled,
     wallEdges: Array.from(wallEdges),
     activeSpecialTiles: Array.from(activeSpecialTiles),
@@ -3791,7 +4324,7 @@ function buildSnapshot(){
     // Configuration sync
     config: {
       turnTimerSeconds, suddenDeathTimerSeconds, suddenDeathEnabled,
-      manualSetup, initialTileValue, roundsPerRing,
+      manualSetup, setupMode, initialTileValue, roundsPerRing,
       shrinkCoverageGateEnabled, shrinkCoveragePercent, showShrinkCounter,
       shrinkAnimMode, specialTilesEnabled, specialTilesInterval,
       scoreTarget, powerupCostMode, powerupPointCost, tilesOfWarEnabled,
@@ -3847,7 +4380,8 @@ function applySnapshot(snap){
     turnTimerSeconds = c.turnTimerSeconds;
     suddenDeathTimerSeconds = c.suddenDeathTimerSeconds;
     suddenDeathEnabled = c.suddenDeathEnabled;
-    manualSetup = c.manualSetup;
+    setupMode = c.setupMode || (c.manualSetup ? 'manual' : 'auto');
+    manualSetup = setupMode === 'manual';
     initialTileValue = c.initialTileValue;
     roundsPerRing = c.roundsPerRing;
     shrinkCoverageGateEnabled = c.shrinkCoverageGateEnabled;
@@ -3865,6 +4399,9 @@ function applySnapshot(snap){
     newsEnabled = (typeof c.newsEnabled === 'boolean') ? c.newsEnabled : newsEnabled;
     powerupCooldownTurns = c.powerupCooldownTurns;
     powerupCooldownMode = c.powerupCooldownMode;
+  if(Array.isArray(snap.skipTurns)){
+    skipTurns = snap.skipTurns.slice();
+  }
 
     // Update DOM elements to reflect Host choices
     if(widthSelect) widthSelect.value = String(snap.gridWidthNum);
@@ -3872,7 +4409,8 @@ function applySnapshot(snap){
     if(turnTimerInput) turnTimerInput.value = String(turnTimerSeconds);
     if(suddenDeathTimerInput) suddenDeathTimerInput.value = String(suddenDeathTimerSeconds);
     if(suddenDeathToggle) suddenDeathToggle.checked = suddenDeathEnabled;
-    if(setupSelect) setupSelect.value = manualSetup ? 'manual' : 'auto';
+    if(setupSelect) setupSelect.value = setupMode;
+    updateSetupPreview();
     if(initValueSelect) initValueSelect.value = String(initialTileValue);
     if(roundsPerRingInput) roundsPerRingInput.value = String(roundsPerRing);
     if(shrinkCoverageToggle) shrinkCoverageToggle.checked = shrinkCoverageGateEnabled;
@@ -3888,6 +4426,7 @@ function applySnapshot(snap){
     if(powerupRomboidToggle) powerupRomboidToggle.checked = !!powerupEnabled.romboid;
     if(powerupViewfinderToggle) powerupViewfinderToggle.checked = !!powerupEnabled.viewfinder;
     if(powerupWallToggle) powerupWallToggle.checked = !!powerupEnabled.wall;
+    if(powerupSkipToggle) powerupSkipToggle.checked = !!powerupEnabled.skip;
     updatePowerupOptionsVisibility();
     if(showDefeatPopupToggle) showDefeatPopupToggle.checked = showDefeatPopup;
     if(newsToggle) newsToggle.checked = newsEnabled;
@@ -4012,6 +4551,50 @@ function applySnapshot(snap){
   // Restart timer for the new turn
   startTurnTimer();
   processPendingActions();
+}
+
+function getGeometricPositions(W, H, p){
+  const positions = [];
+  if(p <= 0) return positions;
+  const cx = (W - 1) / 2;
+  const cy = (H - 1) / 2;
+  const margin = (Math.min(W, H) >= 8) ? 1 : 0;
+  const maxRadius = Math.min(cx, cy, (W - 1) - cx, (H - 1) - cy) - margin;
+  const radius = Math.max(0, maxRadius);
+  const used = new Set();
+
+  const findNearestFree = (startX, startY) => {
+    if(startX >= 0 && startX < W && startY >= 0 && startY < H && !used.has(keyXY(startX, startY))){
+      return {x: startX, y: startY};
+    }
+    for(let r = 1; r <= Math.max(W, H); r++){
+      for(let dx = -r; dx <= r; dx++){
+        const dy = r - Math.abs(dx);
+        const candidates = [
+          {x: startX + dx, y: startY + dy},
+          {x: startX + dx, y: startY - dy}
+        ];
+        for(const c of candidates){
+          if(c.x < 0 || c.y < 0 || c.x >= W || c.y >= H) continue;
+          const key = keyXY(c.x, c.y);
+          if(!used.has(key)) return c;
+        }
+      }
+    }
+    return {x: Math.max(0, Math.min(W - 1, startX)), y: Math.max(0, Math.min(H - 1, startY))};
+  };
+
+  for(let i = 0; i < p; i++){
+    const angle = (-Math.PI / 2) + (i * 2 * Math.PI / p);
+    let x = Math.round(cx + radius * Math.cos(angle));
+    let y = Math.round(cy + radius * Math.sin(angle));
+    x = Math.max(0, Math.min(W - 1, x));
+    y = Math.max(0, Math.min(H - 1, y));
+    const placed = findNearestFree(x, y);
+    used.add(keyXY(placed.x, placed.y));
+    positions.push({xx: placed.x, yy: placed.y});
+  }
+  return positions;
 }
 function handleIncomingAction(action){
   logicalRoundWorkDone = false;
