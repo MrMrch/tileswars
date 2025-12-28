@@ -80,7 +80,7 @@
           <div id="setupPreview" class="preset-preview" aria-live="polite"></div>
           <label class="checkbox-row">
             <input type="checkbox" id="preformToggle">
-            Enable preform formations
+            Enable formations
           </label>
           <div class="form-row">
             <label for="initValueSelect">Initial Tile Value</label>
@@ -155,6 +155,7 @@
               <option value="tile" selected>Sacrifice tile</option>
               <option value="points">Pay points</option>
               <option value="either">Tile or points</option>
+              <option value="formations">Formations</option>
             </select>
             <input type="number" id="powerupPointCost" min="0" max="200" value="20" style="max-width:120px" title="Points cost if paying with points"/>
           </div>
@@ -260,7 +261,7 @@
     <div id="pixiContainer"></div>
     <div id="preformMenu" aria-hidden="true">
       <div class="preform-header">
-        <span id="preformTitle">Preform</span>
+        <span id="preformTitle">Formations</span>
       </div>
       <div class="preform-controls">
         <button id="preformPrevBtn" type="button">◀</button>

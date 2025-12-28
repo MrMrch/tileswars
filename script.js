@@ -371,6 +371,7 @@ function resizeBoardToFitViewport(animate = true){
     if(preformEnabled && setupPhase){
       renderPreformOverlay(preformHoverAnchor);
     }
+    renderFormationOverlay();
   };
 
   if(!animate){
@@ -468,6 +469,7 @@ let wallEdges = new Set(); // store edges "x1,y1|x2,y2"
 let wallsLayer = null;
 let wallPreviewLayer = null;
 let preformOverlayLayer = null;
+let formationOverlayLayer = null;
 let wallsToRemove = new Set();
 let useQuadrantSeedPreset = false;
 let applyQuadrantSeedThisGame = false;
@@ -492,6 +494,7 @@ let activeSpecialTiles = new Set();
 let scoreTarget = 100;
 let powerupCostMode = 'tile'; // tile | points | either
 let powerupPointCost = 20;
+let formationStates = [];
 let netMode = 'local';
 let ws = null;
 let roomId = null;
@@ -684,8 +687,160 @@ function canUsePower(power){
   if(!tilesOfWarEnabled) return false;
   if(!powerupEnabled[power]) return false;
   if(turnInProgress || pendingPowerAction) return false;
-  if(!playerHasLevel3(turnPlayer)) return false;
+  if(powerupCostMode === 'formations'){
+    if(!getFormationState(turnPlayer).ready) return false;
+  } else if(!playerHasLevel3(turnPlayer)){
+    return false;
+  }
   return getPowerCooldown(turnPlayer, power) <= 0;
+}
+function getFormationState(playerIdx){
+  if(!formationStates[playerIdx]){
+    formationStates[playerIdx] = {turnsStable:0, ready:false, match:null};
+  }
+  return formationStates[playerIdx];
+}
+function rotateVector(vec, turns){
+  let x = vec.x, y = vec.y;
+  const t = ((turns % 4) + 4) % 4;
+  for(let i=0;i<t;i++){
+    const nx = y;
+    const ny = -x;
+    x = nx; y = ny;
+  }
+  return {x, y};
+}
+function chooseFormationRotation(sx, sy, patternDef){
+  const grid = patternDef.grid;
+  const sizeY = grid.length;
+  const sizeX = grid[0].length;
+  const centerX = sx + (sizeX - 1) / 2;
+  const centerY = sy + (sizeY - 1) / 2;
+  const boardCx = (gridWidthNum - 1) / 2;
+  const boardCy = (gridHeightNum - 1) / 2;
+  const dir = {x: boardCx - centerX, y: boardCy - centerY};
+  let best = 0;
+  let bestDot = -Infinity;
+  for(let r=0;r<4;r++){
+    const fwd = rotateVector(patternDef.forward, r);
+    const dot = fwd.x * dir.x + fwd.y * dir.y;
+    if(dot > bestDot){
+      bestDot = dot;
+      best = r;
+    }
+  }
+  return best;
+}
+function matchFormationAt(playerIdx, patternDef, sx, sy){
+  const rotation = chooseFormationRotation(sx, sy, patternDef);
+  const patternGrid = getRotatedPattern(patternDef.grid, rotation);
+  const sizeY = patternGrid.length;
+  const sizeX = patternGrid[0].length;
+  for(let y=0;y<sizeY;y++){
+    for(let x=0;x<sizeX;x++){
+      const gx = sx + x;
+      const gy = sy + y;
+      if(gx < 0 || gy < 0 || gx >= gridWidthNum || gy >= gridHeightNum) return null;
+      const tile = grid[gx][gy];
+      if(!tile || tile.isVoid || tile.isRock) return null;
+      const req = patternGrid[y][x];
+      if(req === 3){
+        if(tile.player !== playerIdx || tile.value !== 3) return null;
+      } else if(req === 2){
+        if(tile.player !== playerIdx || tile.value !== 2) return null;
+      } else {
+        if(tile.player !== null && tile.player !== playerIdx) return null;
+        if(tile.value === 3) return null;
+      }
+    }
+  }
+  return {name: patternDef.name, x: sx, y: sy, rotation, key: `${patternDef.name}:${sx},${sy}:${rotation}`};
+}
+function detectFormationForPlayer(playerIdx){
+  for(const pattern of formationPatterns){
+    const grid = pattern.grid;
+    const sizeY = grid.length;
+    const sizeX = grid[0].length;
+    for(let y=0;y<=gridHeightNum - sizeY;y++){
+      for(let x=0;x<=gridWidthNum - sizeX;x++){
+        const match = matchFormationAt(playerIdx, pattern, x, y);
+        if(match) return match;
+      }
+    }
+  }
+  return null;
+}
+function updateFormationStateForPlayer(playerIdx){
+  const state = getFormationState(playerIdx);
+  if(!tilesOfWarEnabled || powerupCostMode !== 'formations'){
+    state.turnsStable = 0;
+    state.ready = false;
+    state.match = null;
+    return;
+  }
+  const match = detectFormationForPlayer(playerIdx);
+  if(match){
+    if(state.match && state.match.key === match.key){
+      if(!state.ready){
+        state.turnsStable++;
+      }
+    } else {
+      state.turnsStable = 1;
+      state.ready = false;
+    }
+    state.match = match;
+    if(state.turnsStable >= 3){
+      state.ready = true;
+    }
+  } else {
+    state.turnsStable = 0;
+    state.ready = false;
+    state.match = null;
+  }
+}
+function consumeFormationCost(playerIdx){
+  const state = getFormationState(playerIdx);
+  state.turnsStable = 0;
+  state.ready = false;
+  state.match = null;
+}
+function renderFormationOverlay(){
+  if(!formationOverlayLayer) return;
+  formationOverlayLayer.removeChildren();
+  if(!tilesOfWarEnabled || powerupCostMode !== 'formations' || setupPhase) return;
+  const state = getFormationState(turnPlayer);
+  if(!state.match) return;
+  const {name, x, y, rotation} = state.match;
+  const pattern = formationPatterns.find(p => p.name === name);
+  if(!pattern) return;
+  const grid = getRotatedPattern(pattern.grid, rotation);
+  const g = new PIXI.Graphics();
+  const lineColor = state.ready ? 0xffffff : 0xe5e7eb;
+  const alpha = state.ready ? 0.9 : 0.6;
+  const corner = Math.max(3, getTileCornerRadius() - 2);
+  const pad = Math.max(3, Math.round(tileSize * 0.08));
+  g.lineStyle(2, lineColor, alpha);
+  for(let yy=0;yy<grid.length;yy++){
+    for(let xx=0;xx<grid[yy].length;xx++){
+      const req = grid[yy][xx];
+      if(req <= 0) continue;
+      const gx = x + xx;
+      const gy = y + yy;
+      g.drawRoundedRect(gx * tileSize + pad, gy * tileSize + pad, tileSize - pad * 2, tileSize - pad * 2, corner);
+    }
+  }
+  formationOverlayLayer.addChild(g);
+  const remaining = state.ready ? 'Ready' : `${3 - state.turnsStable}`;
+  const label = new PIXI.Text(remaining, {
+    fontFamily: 'Arial',
+    fontSize: Math.max(10, Math.round(tileSize * 0.4)),
+    fill: lineColor,
+    stroke: 0x111111,
+    strokeThickness: 2
+  });
+  label.x = x * tileSize + 4;
+  label.y = y * tileSize + 4;
+  formationOverlayLayer.addChild(label);
 }
 function updatePowerupUI(){
   if(!powerupBar) return;
@@ -695,7 +850,8 @@ function updatePowerupUI(){
     return;
   }
   powerupBar.style.display = 'flex';
-  const baseReady = tilesOfWarEnabled && !turnInProgress && !pendingPowerAction && playerHasLevel3(turnPlayer);
+  const baseReady = tilesOfWarEnabled && !turnInProgress && !pendingPowerAction
+    && (powerupCostMode === 'formations' ? getFormationState(turnPlayer).ready : playerHasLevel3(turnPlayer));
   if(activePowerup && (!baseReady || !powerupEnabled[activePowerup] || getPowerCooldown(turnPlayer, activePowerup) > 0)){
     activePowerup = null;
   }
@@ -1260,7 +1416,7 @@ function updateSetupPreview(){
   if(preformToggle && preformToggle.checked && !canPreform){
     const note = document.createElement('div');
     note.className = 'title';
-    note.textContent = 'Preform requires at least 11x11 and non-manual setup.';
+    note.textContent = 'Formations require at least 11x11 and non-manual setup.';
     setupPreview.appendChild(note);
   }
 }
@@ -1455,6 +1611,45 @@ function computePreformRegionsFromCenters(centers){
       }
     }
   });
+}
+function normalizePreformCenters(centers){
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const minX = 2;
+  const maxX = Math.max(2, gridWidthNum - 3);
+  const minY = 2;
+  const maxY = Math.max(2, gridHeightNum - 3);
+  const normalized = centers.map(c => {
+    if(!c) return null;
+    return {
+      xx: clamp(c.xx, minX, maxX),
+      yy: clamp(c.yy, minY, maxY)
+    };
+  });
+  const overlaps = (a, b) => Math.abs(a.xx - b.xx) <= 4 && Math.abs(a.yy - b.yy) <= 4;
+  let moved = true;
+  let guard = 0;
+  while(moved && guard < 50){
+    moved = false;
+    guard++;
+    for(let i=0;i<normalized.length;i++){
+      const cur = normalized[i];
+      if(!cur) continue;
+      for(let j=0;j<i;j++){
+        const other = normalized[j];
+        if(!other) continue;
+        if(!overlaps(cur, other)) continue;
+        const dx = cur.xx - other.xx;
+        const dy = cur.yy - other.yy;
+        if(Math.abs(dx) >= Math.abs(dy)){
+          cur.xx = clamp(cur.xx + (dx >= 0 ? 1 : -1), minX, maxX);
+        } else {
+          cur.yy = clamp(cur.yy + (dy >= 0 ? 1 : -1), minY, maxY);
+        }
+        moved = true;
+      }
+    }
+  }
+  return normalized;
 }
 function getSetupSpawnCenters(){
   if(setupMode === 'geometric'){
@@ -1933,6 +2128,7 @@ startBtn.onclick = () => {
   pixiContainer.style.width  = `${w}px`;
   pixiContainer.style.height = `${h}px`;
   app.stage.sortableChildren = true;
+  formationOverlayLayer = new PIXI.Container(); formationOverlayLayer.zIndex = 7; app.stage.addChild(formationOverlayLayer);
   preformOverlayLayer = new PIXI.Graphics(); preformOverlayLayer.zIndex = 8; app.stage.addChild(preformOverlayLayer);
   wallPreviewLayer = new PIXI.Graphics(); wallPreviewLayer.zIndex = 9; app.stage.addChild(wallPreviewLayer);
   wallsLayer = new PIXI.Graphics(); wallsLayer.zIndex = 10; app.stage.addChild(wallsLayer);
@@ -2020,6 +2216,7 @@ function startNewGame(){
   for(let i=0;i<totalPlayers;i++){ powerupCooldowns[i] = (powerupCooldownMode==='perPower') ? {romboid:0,viewfinder:0,wall:0,skip:0} : 0; }
   playerPointsCurrent = new Array(totalPlayers).fill(0);
   skipTurns = new Array(totalPlayers).fill(0);
+  formationStates = new Array(totalPlayers).fill(null).map(() => ({turnsStable:0, ready:false, match:null}));
   activePowerup = null;
   pendingPowerAction = null;
   wallEdges = new Set();
@@ -2029,7 +2226,7 @@ function startNewGame(){
   clearWallPreview();
   if(preformEnabled){
     initPreformState();
-    preformSeedCenters = getSetupSpawnCenters();
+    preformSeedCenters = normalizePreformCenters(getSetupSpawnCenters());
     computePreformRegionsFromCenters(preformSeedCenters);
     togglePreformMenu(true);
     preformHoverAnchor = null;
@@ -2121,6 +2318,7 @@ function startNewGame(){
   updateBackgroundForCurrentPlayer();
   updateLeaderboard();
   renderPreformOverlay(null);
+  renderFormationOverlay();
   postNews("Welcome to Tiles Wars. Secure the center; borders will shrink every 10 rounds.", 0x444444);
   if(netMode === 'multi' && isHost){
     broadcastState();
@@ -2263,15 +2461,11 @@ function runLocalClick(x, y){
   if(setupPhase && preformEnabled){
     const {name, grid: baseGrid} = getPatternByIndex(preformState.selectedIndex);
     const pattern = getRotatedPattern(baseGrid, preformState.rotation);
+    if(preformState.placed[turnPlayer]) return;
     if(!canPlacePreformAt(turnPlayer, x, y, pattern)) return;
     placePreformAt(turnPlayer, x, y, pattern);
     preformState.placed[turnPlayer] = true;
-    const allPlaced = preformState.placed.every(Boolean);
-    if(allPlaced){
-      setupPhase = false;
-      togglePreformMenu(false);
-      renderPreformOverlay(null);
-    }
+    playersWhoHavePlaced++;
     endTurn();
     return;
   }
@@ -2342,12 +2536,15 @@ function runLocalClick(x, y){
     const tile = grid[x][y];
     if(!tile || tile.player !== turnPlayer || tile.value < 3) return;
     logEvent('powerup_activate', {power: activePowerup, player: turnPlayer, x, y});
+    const canPayFormation = powerupCostMode === 'formations' && getFormationState(turnPlayer).ready;
     const canPayPoints = (powerupCostMode === 'points' || powerupCostMode === 'either') && (playerPointsCurrent[turnPlayer]||0) >= powerupPointCost;
     const canPayTile = (powerupCostMode === 'tile' || powerupCostMode === 'either');
     turnInProgress = true;
     beginTurnStats(turnPlayer, x, y);
     if(activePowerup === 'romboid'){
-      if(canPayPoints){
+      if(canPayFormation){
+        consumeFormationCost(turnPlayer);
+      } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(!canPayTile){
         turnInProgress=false; activePowerup=null; updatePowerupUI(); return;
@@ -2366,7 +2563,9 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'viewfinder'){
-      if(canPayPoints){
+      if(canPayFormation){
+        consumeFormationCost(turnPlayer);
+      } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(canPayTile){
         const before = snapshotTileState(tile);
@@ -2384,7 +2583,9 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'skip'){
-      if(canPayPoints){
+      if(canPayFormation){
+        consumeFormationCost(turnPlayer);
+      } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(canPayTile){
         const before = snapshotTileState(tile);
@@ -2402,7 +2603,9 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'wall'){
-      if(canPayPoints){
+      if(canPayFormation){
+        consumeFormationCost(turnPlayer);
+      } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
       } else if(canPayTile){
         const before = snapshotTileState(tile);
@@ -2580,9 +2783,15 @@ function endTurn(isRemoteOverride){
       }
     }
 
+    updateFormationStateForPlayer(turnPlayer);
+    renderFormationOverlay();
+
     if(setupPhase){
       if(playersWhoHavePlaced >= totalPlayers){
         setupPhase = false;
+        togglePreformMenu(false);
+        preformHoverAnchor = null;
+        renderPreformOverlay(null);
         console.log("Setup phase completed. Transitioning to Turn state.");
       }
     }
@@ -2653,6 +2862,10 @@ function endTurn(isRemoteOverride){
 function nextPlayer(){
   if(setupPhase){
     turnPlayer = (turnPlayer + 1) % totalPlayers;
+    if(preformEnabled){
+      preformHoverAnchor = null;
+      renderPreformOverlay(null);
+    }
     return;
   }
 
@@ -4384,26 +4597,185 @@ function performAIMove(playerIndex){
     return;
   }
 
-  // ... (priority logic) ...
-  const priorityTiles = [];
-  ownedTiles.forEach(tilePos => {
-    const tile = grid[tilePos.x][tilePos.y];
-    if(tile.value === 3){
-      const neighbors = getNeighbors(tilePos.x, tilePos.y);
-      for(let neighbor of neighbors){
-        const neighborTile = grid[neighbor.x][neighbor.y];
-        if(neighborTile.player !== playerIndex && neighborTile.value === 3){
-          priorityTiles.push(tilePos);
-          break;
+  const L_PATTERNS = [
+    [{x:1,y:0},{x:0,y:1},{x:1,y:1}],
+    [{x:-1,y:0},{x:0,y:1},{x:-1,y:1}],
+    [{x:1,y:0},{x:0,y:-1},{x:1,y:-1}],
+    [{x:-1,y:0},{x:0,y:-1},{x:-1,y:-1}]
+  ];
+  const enemy3Set = new Set();
+  for(let x=0;x<gridWidthNum;x++){
+    for(let y=0;y<gridHeightNum;y++){
+      const t = grid[x][y];
+      if(!t || t.isVoid || t.isRock) continue;
+      if(t.player !== null && t.player !== playerIndex && t.value === 3){
+        enemy3Set.add(keyXY(x,y));
+      }
+    }
+  }
+  const trapCenters = [];
+  for(let x=0;x<gridWidthNum;x++){
+    for(let y=0;y<gridHeightNum;y++){
+      const center = grid[x][y];
+      if(!center || center.isVoid || center.isRock) continue;
+      if(center.player !== playerIndex || center.value > 2) continue;
+      const neighbors = getNeighbors(x, y);
+      const hasEnemy3 = neighbors.some(n=>{
+        const t = grid[n.x][n.y];
+        return t && t.player !== null && t.player !== playerIndex && t.value === 3;
+      });
+      if(!hasEnemy3) continue;
+      const patterns = [];
+      for(const offsets of L_PATTERNS){
+        let usable = true;
+        let count3 = 0;
+        for(const off of offsets){
+          const gx = x + off.x;
+          const gy = y + off.y;
+          if(gx < 0 || gy < 0 || gx >= gridWidthNum || gy >= gridHeightNum){
+            usable = false; break;
+          }
+          const t = grid[gx][gy];
+          if(!t || t.isVoid || t.isRock){ usable = false; break; }
+          if(t.player === playerIndex && t.value === 3) count3++;
+        }
+        if(usable){
+          patterns.push({offsets, count3});
+        }
+      }
+      if(patterns.length){
+        trapCenters.push({x, y, center, patterns});
+      }
+    }
+  }
+
+  const cx = (gridWidthNum - 1) / 2;
+  const cy = (gridHeightNum - 1) / 2;
+  let chosenTilePos = null;
+  let bestScore = -Infinity;
+
+  const getStateAt = (x, y, overrides) => {
+    const key = keyXY(x,y);
+    if(overrides && overrides.has(key)) return overrides.get(key);
+    return grid[x]?.[y] || null;
+  };
+  const friendly3CountAroundEnemy = (ex, overrides, convertedSet) => {
+    let count = 0;
+    const neighbors = getNeighbors(ex.x, ex.y);
+    for(const n of neighbors){
+      const key = keyXY(n.x, n.y);
+      if(convertedSet && convertedSet.has(key)) continue;
+      const t = getStateAt(n.x, n.y, overrides);
+      if(!t || t.isVoid || t.isRock) continue;
+      if(t.player === playerIndex && t.value === 3) count++;
+    }
+    return count;
+  };
+  const estimateBackfirePenalty = (pos, tile) => {
+    let penalty = 0;
+    const overrides = new Map();
+    if(tile.value < 3){
+      const newValue = tile.value + 1;
+      if(newValue === 3){
+        overrides.set(keyXY(pos.x,pos.y), {player: playerIndex, value: 3, isVoid: false, isRock: false});
+        const neighbors = getNeighbors(pos.x, pos.y);
+        for(const n of neighbors){
+          const key = keyXY(n.x, n.y);
+          if(!enemy3Set.has(key)) continue;
+          const ex = {x: n.x, y: n.y};
+          const friendlyCount = friendly3CountAroundEnemy(ex, overrides);
+          penalty += 25 + Math.max(0, (friendlyCount - 1) * 10);
+        }
+      }
+      return penalty;
+    }
+    const neighbors = getNeighbors(pos.x, pos.y);
+    const convertedSet = new Set();
+    for(const n of neighbors){
+      const t = grid[n.x]?.[n.y];
+      if(!t || t.isVoid || t.isRock) continue;
+      const newValue = t.value + 1;
+      convertedSet.add(keyXY(n.x, n.y));
+      overrides.set(keyXY(n.x,n.y), {player: playerIndex, value: newValue, isVoid: false, isRock: false});
+    }
+    for(const n of neighbors){
+      const newState = getStateAt(n.x, n.y, overrides);
+      if(!newState || newState.value !== 3) continue;
+      const adj = getNeighbors(n.x, n.y);
+      for(const a of adj){
+        const key = keyXY(a.x, a.y);
+        if(!enemy3Set.has(key)) continue;
+        if(convertedSet.has(key)) continue;
+        const ex = {x: a.x, y: a.y};
+        const friendlyCount = friendly3CountAroundEnemy(ex, overrides, convertedSet);
+        penalty += 25 + Math.max(0, (friendlyCount - 1) * 10);
+      }
+    }
+    return penalty;
+  };
+
+  const scoreTacticalMove = (pos, tile) => {
+    let score = 0;
+    const newValue = tile.value + 1;
+    for(const centerData of trapCenters){
+      for(const pattern of centerData.patterns){
+        const isCenter = (pos.x === centerData.x && pos.y === centerData.y);
+        if(isCenter){
+          if(tile.value === 1 && newValue === 2){
+            score = Math.max(score, 18 + 6 * pattern.count3);
+          }
+          continue;
+        }
+        let isFeeder = false;
+        for(const off of pattern.offsets){
+          if(pos.x === centerData.x + off.x && pos.y === centerData.y + off.y){
+            isFeeder = true;
+            break;
+          }
+        }
+        if(!isFeeder) continue;
+        if(tile.value === 3 && centerData.center.value === 2 && pattern.count3 === 3){
+          score = Math.max(score, 120);
+        } else if(newValue === 3){
+          const countAfter = pattern.count3 + (tile.value === 3 ? 0 : 1);
+          if(countAfter === 3 && centerData.center.value === 2){
+            score = Math.max(score, 80);
+          } else {
+            score = Math.max(score, 20 + 8 * countAfter);
+          }
         }
       }
     }
-  });
+    return score;
+  };
 
-  let chosenTilePos;
-  if(priorityTiles.length > 0){
-    chosenTilePos = priorityTiles[0];
-  } else {
+  for(const pos of ownedTiles){
+    const tile = grid[pos.x][pos.y];
+    if(!tile) continue;
+    let score = 0;
+    if(tile.value === 3){
+      const neighbors = getNeighbors(pos.x, pos.y);
+      const hasEnemy3Adj = neighbors.some(n=>{
+        const t = grid[n.x][n.y];
+        return t && t.player !== null && t.player !== playerIndex && t.value === 3;
+      });
+      if(hasEnemy3Adj) score += 90;
+    }
+    if(shrinkEnabled){
+      const dx = pos.x - cx;
+      const dy = pos.y - cy;
+      const distCenter = Math.hypot(dx, dy);
+      const edgeDist = Math.min(pos.x, pos.y, (gridWidthNum - 1) - pos.x, (gridHeightNum - 1) - pos.y);
+      score += (edgeDist * 2) - (distCenter * 1.5);
+    }
+    score += scoreTacticalMove(pos, tile);
+    score -= estimateBackfirePenalty(pos, tile);
+    if(score > bestScore){
+      bestScore = score;
+      chosenTilePos = pos;
+    }
+  }
+  if(!chosenTilePos){
     chosenTilePos = ownedTiles[Math.floor(Math.random() * ownedTiles.length)];
   }
   logEvent('ai_move', {player: playerIndex, x: chosenTilePos.x, y: chosenTilePos.y});
@@ -4670,6 +5042,7 @@ function buildSnapshot(){
     turnPlayer, tilesCount, playerPointsCurrent, playerBonusPoints,
     roundsCompleted, shrinkRoundsCompleted, turnsTaken, ringsApplied,
     skipTurns,
+    formationStates,
     shrinkGateReached, shrinkEnabled,
     wallEdges: Array.from(wallEdges),
     activeSpecialTiles: Array.from(activeSpecialTiles),
@@ -4774,7 +5147,7 @@ function applySnapshot(snap){
     updateSetupPreview();
     if(preformEnabled){
       initPreformState();
-      preformSeedCenters = getSetupSpawnCenters();
+      preformSeedCenters = normalizePreformCenters(getSetupSpawnCenters());
       computePreformRegionsFromCenters(preformSeedCenters);
       togglePreformMenu(true);
       preformHoverAnchor = null;
@@ -4832,6 +5205,7 @@ function applySnapshot(snap){
     pixiContainer.style.width = `${w}px`;
     pixiContainer.style.height = `${h}px`;
     app.stage.sortableChildren = true;
+    formationOverlayLayer = new PIXI.Container(); formationOverlayLayer.zIndex = 7; app.stage.addChild(formationOverlayLayer);
     preformOverlayLayer = new PIXI.Graphics(); preformOverlayLayer.zIndex = 8; app.stage.addChild(preformOverlayLayer);
     wallPreviewLayer = new PIXI.Graphics(); wallPreviewLayer.zIndex = 9; app.stage.addChild(wallPreviewLayer);
     wallsLayer = new PIXI.Graphics(); wallsLayer.zIndex = 10; app.stage.addChild(wallsLayer);
@@ -4874,6 +5248,15 @@ function applySnapshot(snap){
   ringsApplied = snap.ringsApplied ?? ringsApplied;
   shrinkGateReached = !!snap.shrinkGateReached;
   shrinkEnabled = !!snap.shrinkEnabled;
+  if(Array.isArray(snap.formationStates)){
+    formationStates = snap.formationStates.map(s => ({
+      turnsStable: s && typeof s.turnsStable === 'number' ? s.turnsStable : 0,
+      ready: !!(s && s.ready),
+      match: s && s.match ? s.match : null
+    }));
+  } else if(!formationStates || formationStates.length !== totalPlayers){
+    formationStates = new Array(totalPlayers).fill(null).map(() => ({turnsStable:0, ready:false, match:null}));
+  }
   wallEdges = new Set(snap.wallEdges || []);
   activeSpecialTiles = new Set(snap.activeSpecialTiles || []);
   if(snap.startingPeers){ startingPeers = snap.startingPeers; mySeat = computeMySeat(); }
@@ -4906,6 +5289,13 @@ function applySnapshot(snap){
   updateLeaderboard();
   renderPreformOverlay(null);
   updatePowerupUI();
+  if(!Array.isArray(formationStates) || formationStates.length !== totalPlayers){
+    formationStates = new Array(totalPlayers).fill(null).map(() => ({turnsStable:0, ready:false, match:null}));
+    for(let i=0;i<totalPlayers;i++){
+      updateFormationStateForPlayer(i);
+    }
+  }
+  renderFormationOverlay();
 
   // Always update visuals and timers since we don't receive our own messages
   snap.cells.forEach(c=>{
@@ -5123,6 +5513,41 @@ const preformPatterns = [
   ]},
   { name: 'Random A', grid: null },
   { name: 'Random B', grid: null }
+];
+const formationPatterns = [
+  {
+    name: 'Ring',
+    forward: {x: 0, y: -1},
+    grid: [
+      [0,0,0,0,0],
+      [0,3,3,3,0],
+      [2,3,0,3,2],
+      [0,3,3,3,0],
+      [0,0,0,0,0]
+    ]
+  },
+  {
+    name: 'Serpent',
+    forward: {x: 1, y: 0},
+    grid: [
+      [0,3,3,2,0],
+      [0,0,0,3,0],
+      [0,2,3,3,0],
+      [0,3,0,0,0],
+      [0,3,3,0,0]
+    ]
+  },
+  {
+    name: 'Crest',
+    forward: {x: 1, y: 0},
+    grid: [
+      [0,3,3,3,0],
+      [0,3,0,0,0],
+      [2,3,0,0,0],
+      [0,3,0,0,0],
+      [0,3,3,2,0]
+    ]
+  }
 ];
 function handleIncomingAction(action){
   logicalRoundWorkDone = false;
