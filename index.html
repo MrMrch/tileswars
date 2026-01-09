@@ -155,10 +155,21 @@
               <option value="tile" selected>Sacrifice tile</option>
               <option value="points">Pay points</option>
               <option value="either">Tile or points</option>
-              <option value="formations">Formations</option>
+              <option value="factories">Factories</option>
             </select>
             <input type="number" id="powerupPointCost" min="0" max="200" value="20" style="max-width:120px" title="Points cost if paying with points"/>
           </div>
+          <div class="form-row" id="factoryModeRow" style="display:none;">
+            <label for="factoryModeSelect">Factory Mode</label>
+            <select id="factoryModeSelect">
+              <option value="choose" selected>Choose (All Visible)</option>
+              <option value="random">Random Assignment</option>
+            </select>
+          </div>
+          <label class="checkbox-row" id="factoryEmptyRow" style="display:none;">
+            <input type="checkbox" id="factoryEmptyToggle" checked>
+            Strict empty border around factories
+          </label>
         </div>
 
         <div class="form-group group-endgame">
@@ -235,8 +246,8 @@
     </div>
   </div>
 
-  <!-- ================== GAME CONTAINER ================== -->
-  <div id="game-container">
+    <div id="game-container">
+    <div id="factoriesPanel" class="factories-panel"></div>
     <div id="powerupBar" aria-hidden="true">
       <button class="powerup-btn" id="powerupRomboid" disabled>⬦ Romboid</button>
       <button class="powerup-btn" id="powerupViewfinder" disabled>🎯 Viewfinder</button>

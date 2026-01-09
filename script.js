@@ -65,6 +65,22 @@ const powerupCooldownModeSelect = document.getElementById("powerupCooldownMode")
 const scoreTargetInput = document.getElementById("scoreTargetInput");
 const powerupCostModeSelect = document.getElementById("powerupCostMode");
 const powerupPointCostInput = document.getElementById("powerupPointCost");
+const factoryModeSelect = document.getElementById("factoryModeSelect");
+const factoryModeRow = document.getElementById("factoryModeRow");
+const factoryEmptyRow = document.getElementById("factoryEmptyRow");
+const factoryEmptyToggle = document.getElementById("factoryEmptyToggle");
+
+if(powerupCostModeSelect){
+  powerupCostModeSelect.addEventListener('change', () => {
+    const isFac = (powerupCostModeSelect.value === 'factories');
+    if(factoryModeRow) factoryModeRow.style.display = isFac ? 'flex' : 'none';
+    if(factoryEmptyRow) factoryEmptyRow.style.display = isFac ? 'flex' : 'none';
+  });
+  // Trigger on load
+  const isFac = (powerupCostModeSelect.value === 'factories');
+  if(factoryModeRow) factoryModeRow.style.display = isFac ? 'flex' : 'none';
+  if(factoryEmptyRow) factoryEmptyRow.style.display = isFac ? 'flex' : 'none';
+}
 const presetPreview = document.getElementById("presetPreview");
 const setupPreview = document.getElementById("setupPreview");
 const presetChaos2PBtn = document.getElementById("presetChaos2PBtn");
@@ -93,6 +109,7 @@ const powerupViewfinderToggle = document.getElementById("powerupViewfinderToggle
 const powerupWallToggle = document.getElementById("powerupWallToggle");
 const powerupSkipToggle = document.getElementById("powerupSkipToggle");
 const powerupSkipBtn = document.getElementById("powerupSkip");
+const factoriesPanel = document.getElementById("factoriesPanel");
 
 // Riferimenti all'endgame overlay
 const endgameOverlay     = document.getElementById("endgameOverlay");
@@ -494,6 +511,10 @@ let activeSpecialTiles = new Set();
 let scoreTarget = 100;
 let powerupCostMode = 'tile'; // tile | points | either
 let powerupPointCost = 20;
+let factoryMode = 'choose'; // choose | random
+let assignedFactories = []; // per player: index of assigned factory
+let powerupCredits = []; // per player: number of pending credits
+let factoryStrictEmpty = true;
 let formationStates = [];
 let netMode = 'local';
 let ws = null;
@@ -744,13 +765,29 @@ function matchFormationAt(playerIdx, patternDef, sx, sy){
       const tile = grid[gx][gy];
       if(!tile || tile.isVoid || tile.isRock) return null;
       const req = patternGrid[y][x];
+      
+      // If req > 0, it's a core part of the shape. Must match exactly.
       if(req === 3){
         if(tile.player !== playerIdx || tile.value !== 3) return null;
       } else if(req === 2){
         if(tile.player !== playerIdx || tile.value !== 2) return null;
+      } else if(req === 1){
+        // Assuming 1 means value 1
+        if(tile.player !== playerIdx || tile.value !== 1) return null;
       } else {
-        if(tile.player !== null && tile.player !== playerIdx) return null;
-        if(tile.value === 3) return null;
+        // req === 0. This is the "border" or empty space requirement.
+        if(factoryStrictEmpty){
+          // Strict: Must not be owned by enemy OR be a 3.
+          if(tile.player !== null && tile.player !== playerIdx) return null; // Enemy? Fail.
+          if(tile.value === 3) return null; // Unstable 3? Fail.
+        } else {
+          // Permissive: Just don't break the shape (don't be part of another pattern? No, just don't be enemy)
+          // Actually, standard "formation" usually implies shape isolation.
+          // If permissive, we allow allied tiles of ANY value here? 
+          // Or maybe just allow allied tiles.
+          // Let's say: must not be enemy. Allied 3s are OK.
+          if(tile.player !== null && tile.player !== playerIdx) return null;
+        }
       }
     }
   }
@@ -772,38 +809,124 @@ function detectFormationForPlayer(playerIdx){
 }
 function updateFormationStateForPlayer(playerIdx){
   const state = getFormationState(playerIdx);
-  if(!tilesOfWarEnabled || powerupCostMode !== 'formations'){
-    state.turnsStable = 0;
-    state.ready = false;
-    state.match = null;
-    return;
-  }
-  const match = detectFormationForPlayer(playerIdx);
-  if(match){
-    if(state.match && state.match.key === match.key){
-      if(!state.ready){
-        state.turnsStable++;
-      }
-    } else {
-      state.turnsStable = 1;
-      state.ready = false;
-    }
-    state.match = match;
-    if(state.turnsStable >= 3){
-      state.ready = true;
-    }
-  } else {
-    state.turnsStable = 0;
-    state.ready = false;
-    state.match = null;
-  }
-}
-function consumeFormationCost(playerIdx){
-  const state = getFormationState(playerIdx);
+  // Reset match first
   state.turnsStable = 0;
   state.ready = false;
   state.match = null;
+
+  if(!tilesOfWarEnabled || powerupCostMode !== 'factories'){
+    return;
+  }
+  
+  // Choose Mode: Check all patterns
+  // Random Mode: Check only assigned pattern
+  const patternsToCheck = (factoryMode === 'random' && assignedFactories[playerIdx] !== null) 
+    ? [formationPatterns[assignedFactories[playerIdx]]]
+    : formationPatterns;
+
+  let bestMatch = null;
+  for(const pattern of patternsToCheck){
+    if(!pattern) continue;
+    const grid = pattern.grid;
+    const sizeY = grid.length;
+    const sizeX = grid[0].length;
+    for(let y=0;y<=gridHeightNum - sizeY;y++){
+      for(let x=0;x<=gridWidthNum - sizeX;x++){
+        const match = matchFormationAt(playerIdx, pattern, x, y);
+        if(match) {
+          bestMatch = match;
+          break; 
+        }
+      }
+      if(bestMatch) break;
+    }
+    if(bestMatch) break;
+  }
+
+  if(bestMatch){
+    state.match = bestMatch;
+    state.ready = true; // Instant ready for UI feedback, but consumption requires click
+  }
 }
+function consumeFormationCost(playerIdx){
+  if(powerupCostMode === 'formations'){
+    const state = getFormationState(playerIdx);
+    state.turnsStable = 0;
+    state.ready = false;
+    state.match = null;
+  } else if(powerupCostMode === 'factories'){
+    if(powerupCredits[playerIdx] > 0){
+      powerupCredits[playerIdx]--;
+    }
+  }
+}
+
+// New function to claim a factory match
+function claimFactory(playerIdx, patternIndex){
+  if(turnPlayer !== playerIdx) return;
+  const state = getFormationState(playerIdx);
+  if(!state.match) return;
+  
+  // Verify the match corresponds to the clicked card
+  const pattern = formationPatterns[patternIndex];
+  if(state.match.name !== pattern.name) return;
+
+  // Grant credit
+  powerupCredits[playerIdx]++;
+  
+  // In random mode, assign a NEW factory
+  if(factoryMode === 'random'){
+    let newIdx = assignedFactories[playerIdx];
+    // Simple logic: pick random distinct from current if possible
+    if(formationPatterns.length > 1){
+      while(newIdx === assignedFactories[playerIdx]){
+        newIdx = Math.floor(Math.random() * formationPatterns.length);
+      }
+    }
+    assignedFactories[playerIdx] = newIdx;
+  }
+
+  // Consume the formation on board? 
+  // Standard rules: usually yes, or you have to rebuild it.
+  // Implementation: We force a re-check which will fail if we destroy tiles, 
+  // but if we don't destroy tiles, you could spam click.
+  // WE MUST DESTROY TILES or require re-formation.
+  // Let's destroy the tiles involved in the formation (set value to 0, player null).
+  // Or just set them to value 0 (voiding them).
+  // Let's iterate the match and clear tiles.
+  
+  const {x: sx, y: sy, rotation} = state.match;
+  const gridDef = getRotatedPattern(pattern.grid, rotation);
+  for(let y=0;y<gridDef.length;y++){
+    for(let x=0;x<gridDef[y].length;x++){
+      if(gridDef[y][x] > 0){
+        const gx = sx + x;
+        const gy = sy + y;
+        const t = grid[gx][gy];
+        if(t && t.player === playerIdx){
+          // Reduce value or remove? "Sacrifice" usually means remove.
+          // Let's remove them.
+          const before = snapshotTileState(t);
+          t.value = 0;
+          t.player = null;
+          t.currentScale = 0;
+          tilesCount[playerIdx] = Math.max(0, tilesCount[playerIdx]-1);
+          updateTileGraphics(t);
+          logTileChange(gx, gy, before, snapshotTileState(t), 'factory_consume');
+        }
+      }
+    }
+  }
+  
+  state.match = null;
+  state.ready = false;
+  
+  updatePowerupUI();
+  updateLeaderboard();
+  renderFactories(); // Re-render to show new random card or reset state
+  renderFormationOverlay();
+}
+
 function renderFormationOverlay(){
   if(!formationOverlayLayer) return;
   formationOverlayLayer.removeChildren();
@@ -842,7 +965,83 @@ function renderFormationOverlay(){
   label.y = y * tileSize + 4;
   formationOverlayLayer.addChild(label);
 }
+function renderFactories(){
+  if(!factoriesPanel) return;
+  factoriesPanel.innerHTML = '';
+  
+  if(!tilesOfWarEnabled || powerupCostMode !== 'factories'){
+    factoriesPanel.style.display = 'none';
+    return;
+  }
+  factoriesPanel.style.display = 'flex';
+
+  const playerIdx = turnPlayer;
+  const state = getFormationState(playerIdx);
+  
+  const indicesToShow = [];
+  if(factoryMode === 'choose'){
+    for(let i=0; i<formationPatterns.length; i++) indicesToShow.push(i);
+  } else {
+    if(assignedFactories[playerIdx] !== null) indicesToShow.push(assignedFactories[playerIdx]);
+  }
+
+  indicesToShow.forEach(idx => {
+    const pattern = formationPatterns[idx];
+    if(!pattern) return;
+    
+    const card = document.createElement('div');
+    card.className = 'factory-card';
+    
+    const isMatched = state.match && state.match.name === pattern.name;
+    if(isMatched) {
+      card.classList.add('active');
+      card.classList.add('ready');
+      card.onclick = () => claimFactory(playerIdx, idx);
+    } else {
+       card.classList.add('disabled');
+    }
+
+    const title = document.createElement('div');
+    title.className = 'factory-title';
+    title.textContent = pattern.name;
+    
+    const gridEl = document.createElement('div');
+    gridEl.className = 'factory-grid';
+    // Find dimensions
+    const pGrid = pattern.grid;
+    const h = pGrid.length;
+    const w = pGrid[0].length;
+    gridEl.style.gridTemplateColumns = `repeat(${w}, 18px)`;
+    gridEl.style.gridTemplateRows = `repeat(${h}, 18px)`;
+    
+    for(let y=0; y<h; y++){
+      for(let x=0; x<w; x++){
+        const cell = document.createElement('div');
+        cell.className = 'factory-cell';
+        const val = pGrid[y][x];
+        if(val > 0) {
+          cell.classList.add('filled');
+          if(val === 3) cell.classList.add('core');
+          cell.textContent = val;
+        }
+        gridEl.appendChild(cell);
+      }
+    }
+    
+    const status = document.createElement('div');
+    status.className = 'factory-status';
+    status.textContent = isMatched ? "CLAIM" : "";
+    
+    card.appendChild(title);
+    card.appendChild(gridEl);
+    card.appendChild(status);
+    
+    factoriesPanel.appendChild(card);
+  });
+}
+
 function updatePowerupUI(){
+  if(factoriesPanel) renderFactories(); // Sync factories whenever UI updates
   if(!powerupBar) return;
   const anyEnabled = tilesOfWarEnabled && Object.values(powerupEnabled || {}).some(Boolean);
   if(!tilesOfWarEnabled || !anyEnabled){
@@ -850,8 +1049,18 @@ function updatePowerupUI(){
     return;
   }
   powerupBar.style.display = 'flex';
-  const baseReady = tilesOfWarEnabled && !turnInProgress && !pendingPowerAction
-    && (powerupCostMode === 'formations' ? getFormationState(turnPlayer).ready : playerHasLevel3(turnPlayer));
+  
+  let baseReady = false;
+  if(tilesOfWarEnabled && !turnInProgress && !pendingPowerAction){
+    if(powerupCostMode === 'factories'){
+       baseReady = (powerupCredits[turnPlayer] > 0);
+    } else if(powerupCostMode === 'formations'){
+       baseReady = getFormationState(turnPlayer).ready;
+    } else {
+       baseReady = playerHasLevel3(turnPlayer);
+    }
+  }
+
   if(activePowerup && (!baseReady || !powerupEnabled[activePowerup] || getPowerCooldown(turnPlayer, activePowerup) > 0)){
     activePowerup = null;
   }
@@ -868,6 +1077,11 @@ function updatePowerupUI(){
     const readyThis = baseReady && getPowerCooldown(turnPlayer, id) <= 0;
     btn.disabled = !readyThis;
     btn.classList.remove('active');
+    
+    // Add text for credits if needed
+    if(powerupCostMode === 'factories' && readyThis){
+       btn.title = `Credits available: ${powerupCredits[turnPlayer]}`;
+    }
   });
   if(activePowerup==='romboid' && powerupRomboidBtn) powerupRomboidBtn.classList.add('active');
   if(activePowerup==='viewfinder' && powerupViewfinderBtn) powerupViewfinderBtn.classList.add('active');
@@ -878,17 +1092,22 @@ function updatePowerupUI(){
     const cdV = getPowerCooldown(turnPlayer,'viewfinder');
     const cdW = getPowerCooldown(turnPlayer,'wall');
     const cdS = getPowerCooldown(turnPlayer,'skip');
+    let text = '';
     if(powerupCooldownMode === 'perPower'){
       const parts = [];
       if(cdR>0) parts.push(`R:${cdR}`);
       if(cdV>0) parts.push(`V:${cdV}`);
       if(cdW>0) parts.push(`W:${cdW}`);
       if(cdS>0) parts.push(`S:${cdS}`);
-      powerupCooldownHint.textContent = parts.length ? `Cooldowns ${parts.join(' ')}` : '';
+      text = parts.length ? `Cooldowns ${parts.join(' ')}` : '';
     } else {
       const cd = powerupCooldowns[turnPlayer]||0;
-      powerupCooldownHint.textContent = cd>0 ? `Cooldown: ${cd}` : '';
+      text = cd>0 ? `Cooldown: ${cd}` : '';
     }
+    if(powerupCostMode === 'factories'){
+       text += ` | Credits: ${powerupCredits[turnPlayer]}`;
+    }
+    powerupCooldownHint.textContent = text;
   }
 }
 
@@ -1956,6 +2175,8 @@ function syncVariablesFromUI(){
   specialTilesInterval = parseInt(specialTilesIntervalInput ? specialTilesIntervalInput.value : '5', 10) || 5;
   scoreTarget = parseInt(scoreTargetInput ? scoreTargetInput.value : '100', 10) || 100;
   powerupCostMode = (powerupCostModeSelect && powerupCostModeSelect.value) || 'tile';
+  if(factoryModeSelect) factoryMode = factoryModeSelect.value;
+  if(factoryEmptyToggle) factoryStrictEmpty = !!factoryEmptyToggle.checked;
   powerupPointCost = Math.max(0, parseInt(powerupPointCostInput ? powerupPointCostInput.value : '20', 10) || 0);
   tilesOfWarEnabled = !!(tilesOfWarToggle && tilesOfWarToggle.checked);
   preformEnabled = !!(preformToggle && preformToggle.checked);
@@ -2084,10 +2305,12 @@ startBtn.onclick = () => {
   // Se esisteva già un'app Pixi, distruggila per ricrearla
   if(app){
     app.destroy(true, {children: true});
+    if(app.view && pixiContainer.contains(app.view)){
+      pixiContainer.removeChild(app.view);
+    }
     app = null;
-  }
-  if(pixiContainer.contains(app?.view)){
-    pixiContainer.removeChild(app.view);
+  } else {
+    pixiContainer.innerHTML = '';
   }
 
   // Mostra la schermata di gioco per misurare lo spazio disponibile
@@ -2217,6 +2440,17 @@ function startNewGame(){
   playerPointsCurrent = new Array(totalPlayers).fill(0);
   skipTurns = new Array(totalPlayers).fill(0);
   formationStates = new Array(totalPlayers).fill(null).map(() => ({turnsStable:0, ready:false, match:null}));
+  
+  // Factory Mode Initialization
+  assignedFactories = new Array(totalPlayers).fill(null);
+  powerupCredits = new Array(totalPlayers).fill(0);
+  if(factoryMode === 'random' && powerupCostMode === 'factories'){
+    // Assign initial factories
+    for(let i=0; i<totalPlayers; i++){
+      assignedFactories[i] = Math.floor(Math.random() * formationPatterns.length);
+    }
+  }
+  
   activePowerup = null;
   pendingPowerAction = null;
   wallEdges = new Set();
@@ -2318,6 +2552,7 @@ function startNewGame(){
   updateBackgroundForCurrentPlayer();
   updateLeaderboard();
   renderPreformOverlay(null);
+  updateFormationStateForPlayer(turnPlayer); // Update for first player
   renderFormationOverlay();
   postNews("Welcome to Tiles Wars. Secure the center; borders will shrink every 10 rounds.", 0x444444);
   if(netMode === 'multi' && isHost){
@@ -2537,12 +2772,13 @@ function runLocalClick(x, y){
     if(!tile || tile.player !== turnPlayer || tile.value < 3) return;
     logEvent('powerup_activate', {power: activePowerup, player: turnPlayer, x, y});
     const canPayFormation = powerupCostMode === 'formations' && getFormationState(turnPlayer).ready;
+    const canPayFactory = powerupCostMode === 'factories' && powerupCredits[turnPlayer] > 0;
     const canPayPoints = (powerupCostMode === 'points' || powerupCostMode === 'either') && (playerPointsCurrent[turnPlayer]||0) >= powerupPointCost;
     const canPayTile = (powerupCostMode === 'tile' || powerupCostMode === 'either');
     turnInProgress = true;
     beginTurnStats(turnPlayer, x, y);
     if(activePowerup === 'romboid'){
-      if(canPayFormation){
+      if(canPayFormation || canPayFactory){
         consumeFormationCost(turnPlayer);
       } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
@@ -2563,7 +2799,7 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'viewfinder'){
-      if(canPayFormation){
+      if(canPayFormation || canPayFactory){
         consumeFormationCost(turnPlayer);
       } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
@@ -2583,7 +2819,7 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'skip'){
-      if(canPayFormation){
+      if(canPayFormation || canPayFactory){
         consumeFormationCost(turnPlayer);
       } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
@@ -2603,7 +2839,7 @@ function runLocalClick(x, y){
       return;
     }
     if(activePowerup === 'wall'){
-      if(canPayFormation){
+      if(canPayFormation || canPayFactory){
         consumeFormationCost(turnPlayer);
       } else if(canPayPoints){
         playerPointsCurrent[turnPlayer] -= powerupPointCost;
@@ -2827,7 +3063,8 @@ function endTurn(isRemoteOverride){
     updateBackgroundForCurrentPlayer();
     updateLeaderboard();
     turnInProgress = false;
-  updatePowerupUI();
+    updateFormationStateForPlayer(turnPlayer); // Update for new player
+    updatePowerupUI();
   
   // Advance token and clear lock BEFORE broadcasting, 
   // so peers receive the token for the NEW state.
